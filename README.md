@@ -19,4 +19,3 @@ The first milestone is repository setup only. Docker, data ingestion, and Spark 
 
 - Raw TLC data files are not tracked in Git.
 - Generated parquet outputs and local temporary artifacts are not tracked in Git.
-- DuckDB is intentionally out of scope for this project.
