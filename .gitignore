@@ -14,6 +14,7 @@ env/
 
 # Local data and outputs
 data/
+output/
 *.parquet
 *.duckdb
 *.csv
