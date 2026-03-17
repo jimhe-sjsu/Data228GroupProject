@@ -17,6 +17,8 @@ data/
 *.parquet
 *.duckdb
 *.csv
+!data/
+!data/taxi_zone_lookup.csv
 
 # Spark and Hadoop temp artifacts
 spark-warehouse/
