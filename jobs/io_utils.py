@@ -12,14 +12,26 @@ def load_config(path):
         return yaml.safe_load(fh)
 
 def create_spark_session(app_name="NYCTaxiCleaning", config=None):
-    builder = SparkSession.builder.appName(app_name).config("spark.sql.parquet.mergeSchema", "true")
-    if config and config.get("mysql", {}).get("jdbc_jar_path"):
-        builder = builder.config("spark.jars", config["mysql"]["jdbc_jar_path"])
+    builder = (
+        SparkSession.builder
+        .appName(app_name)
+        .config("spark.sql.parquet.mergeSchema", "false")
+        # disable vectorized reader so Spark uses the Java-based reader
+        # which supports zStandard compression (some 2023 NYC Taxi files use it)
+        .config("spark.sql.parquet.enableVectorizedReader", "false")
+    )
     return builder.getOrCreate()
 
 def read_parquet_from_hdfs(spark, paths):
+    # read each path separately then union to avoid cross-year schema conflicts
+    # (e.g. VendorID is bigint in 2022 files, int in 2023 files)
     try:
-        return spark.read.parquet(*paths)
+        dfs = [spark.read.option("mergeSchema", "false").parquet(p) for p in paths]
+        result = dfs[0]
+        for df in dfs[1:]:
+            # align columns to match the first dataframe before union
+            result = result.union(df.select(result.columns))
+        return result
     except Exception as exc:
         raise RuntimeError(f"Failed to read Parquet from HDFS. Paths: {paths}. Error: {exc}") from exc
 

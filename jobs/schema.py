@@ -32,12 +32,15 @@ def get_canonical_schema():
     ])
 
 def enforce_schema(df, schema):
-    existing_names = df.columns
+    # build a lowercase -> actual column name lookup to handle casing differences
+    # across years (e.g. Airport_fee in 2022 vs airport_fee in 2023)
+    col_map = {c.lower(): c for c in df.columns}
     select_exprs = []
-    
+
     for field in schema.fields:
-        if field.name in existing_names:
-            select_exprs.append(F.col(field.name).cast(field.dataType).alias(field.name))
+        actual_col = col_map.get(field.name.lower())
+        if actual_col:
+            select_exprs.append(F.col(actual_col).cast(field.dataType).alias(field.name))
         else:
             select_exprs.append(F.lit(None).cast(field.dataType).alias(field.name))
 
