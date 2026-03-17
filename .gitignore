@@ -31,3 +31,8 @@ derby.log
 # Local temp files
 tmp/
 temp/
+memory/
+
+# Pipeline outputs — charts and report are tracked
+!docs/charts/
+!docs/cleaning_report.md

@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────
+# NYC Taxi Data Cleaning Pipeline — Configuration
+# ─────────────────────────────────────────────────────────────
+
+hdfs:
+  input_paths:
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_tripdata_2022-*.parquet"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_tripdata_2023-*.parquet"
+  output_path: "hdfs://namenode:9000/user/data/nyc_taxi/cleaned"
+  partition_cols:
+    - "pickup_month"
+
+mysql:
+  host: "mysql"
+  port: 3306
+  database: "nyc_taxi"
+  table: "nyc_taxi_cleaned"
+  user: "root"
+  password: "rootpassword"
+  driver: "com.mysql.cj.jdbc.Driver"
+  jdbc_jar_path: "/workspace/jars/mysql-connector-j-8.0.33.jar"
+
+thresholds:
+  max_trip_distance_miles: 100
+  max_passenger_count: 6
+  min_fare_amount: 0.01
+  max_trip_duration_hours: 3
+  valid_years:
+    - 2022
+    - 2023
+  valid_vendor_ids:
+    - 1
+    - 2
+  valid_ratecode_ids:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 99
+  valid_payment_types:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+
+charts:
+  output_dir: "/workspace/docs/charts/"
+
+cleaning_report:
+  output_path: "/workspace/docs/cleaning_report.md"
