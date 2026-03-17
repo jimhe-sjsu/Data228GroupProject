@@ -1,9 +1,10 @@
 services:
   namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
     restart: unless-stopped
     ports:
-      - "9870:9870"
+      - "9871:9870"
       - "9000:9000"
     environment:
       CLUSTER_NAME: data228
@@ -15,11 +16,12 @@ services:
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       - namenode
     ports:
-      - "9864:9864"
+      - "9865:9864"
     environment:
       SERVICE_PRECONDITION: "namenode:9870"
       CORE_CONF_fs_defaultFS: hdfs://namenode:9000
@@ -30,6 +32,7 @@ services:
 
   resourcemanager:
     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       - namenode
@@ -43,6 +46,7 @@ services:
 
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       - resourcemanager
@@ -55,6 +59,7 @@ services:
 
   historyserver:
     image: bde2020/hadoop-historyserver:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       - resourcemanager
@@ -69,6 +74,7 @@ services:
 
   spark-master:
     image: bde2020/spark-master:3.0.0-hadoop3.2
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       - namenode
@@ -85,51 +91,33 @@ services:
 
   spark-worker:
     image: bde2020/spark-worker:3.0.0-hadoop3.2
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       - spark-master
     ports:
-      - "8081:8081"
+      - "8082:8081"
     environment:
       SPARK_MASTER: spark://spark-master:7077
       CORE_CONF_fs_defaultFS: hdfs://namenode:9000
 
-  hive-metastore-postgresql:
-    image: bde2020/hive-metastore-postgresql:2.3.0
+  mysql:
+    image: mysql:8.4
     restart: unless-stopped
-    ports:
-      - "5432:5432"
-
-  hive-metastore:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    restart: unless-stopped
-    depends_on:
-      - namenode
-      - datanode
-      - hive-metastore-postgresql
-    command: /opt/hive/bin/hive --service metastore
-    ports:
-      - "9083:9083"
-    environment:
-      SERVICE_PRECONDITION: "namenode:9870 datanode:9864 hive-metastore-postgresql:5432"
     env_file:
-      - ./config/hadoop-hive.env
-
-  hive-server:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    restart: unless-stopped
-    depends_on:
-      - hive-metastore
-    command: /opt/hive/bin/hiveserver2
+      - ./config/mysql.env
     ports:
-      - "10000:10000"
-    environment:
-      SERVICE_PRECONDITION: "hive-metastore:9083"
-      HIVE_CORE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://hive-metastore/metastore"
-    env_file:
-      - ./config/hadoop-hive.env
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   namenode_data:
   datanode_data:
   historyserver_data:
+  mysql_data:
