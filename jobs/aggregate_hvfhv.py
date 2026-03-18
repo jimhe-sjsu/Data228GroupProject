@@ -12,7 +12,7 @@ MONTHS = [1]
 RAW_HDFS_BASE = "hdfs://namenode:9000/data/nyc_tlc/hvfhv/raw"
 CURATED_HDFS_BASE = "hdfs://namenode:9000/data/nyc_tlc/hvfhv/curated"
 ANALYTICS_HDFS_BASE = "hdfs://namenode:9000/data/nyc_tlc/hvfhv/analytics"
-LOCAL_EXPORT_BASE = Path("/workspace/output/eda")
+LOCAL_EXPORT_BASE = Path("/workspace/output/eda/hvfhv")
 ZONE_LOOKUP_PATH = "/workspace/data/taxi_zone_lookup.csv"
 
 
