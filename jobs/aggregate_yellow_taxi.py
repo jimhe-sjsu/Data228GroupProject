@@ -55,6 +55,10 @@ def read_raw_months(spark: SparkSession) -> DataFrame:
     return reduce(lambda left, right: left.unionByName(right), dataframes[1:], dataframes[0])
 
 
+def filter_expected_scope(df: DataFrame) -> DataFrame:
+    return df.filter(F.col("year") == F.lit(YEAR)).filter(F.col("month").isin(MONTHS))
+
+
 def read_zone_lookup(spark: SparkSession, zone_lookup_path: str) -> DataFrame:
     if not Path(zone_lookup_path).exists():
         raise FileNotFoundError(f"Zone lookup file not found: {zone_lookup_path}")
@@ -261,7 +265,9 @@ def main() -> None:
 
     try:
         raw_count = read_raw_months(spark).count()
-        curated_df = read_curated_months(spark).persist(StorageLevel.DISK_ONLY)
+        curated_df = filter_expected_scope(read_curated_months(spark)).persist(
+            StorageLevel.DISK_ONLY
+        )
         curated_count = curated_df.count()
         zone_lookup_df = read_zone_lookup(spark, ZONE_LOOKUP_PATH)
 

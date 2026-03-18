@@ -77,7 +77,7 @@ def upload_to_hdfs(spark: SparkSession, local_path: Path, hdfs_target: str) -> N
     fs.copyFromLocalFile(False, True, j_path(local_path.as_uri()), target_path)
 
 
-def clean_hvfhv(raw_df):
+def clean_yellow_taxi(raw_df, expected_year: int, expected_month: int):
     available_columns = [column for column in SELECT_COLUMNS if column in raw_df.columns]
     missing_required = {
         "tpep_pickup_datetime",
@@ -115,6 +115,8 @@ def clean_hvfhv(raw_df):
         .withColumn("is_weekend", F.col("pickup_weekday_num").isin(1, 7))
         .withColumn("year", F.year("pickup_datetime"))
         .withColumn("month", F.month("pickup_datetime"))
+        .filter(F.col("year") == F.lit(expected_year))
+        .filter(F.col("month") == F.lit(expected_month))
     )
 
     if "trip_distance" in df.columns:
@@ -148,7 +150,7 @@ def main() -> None:
 
             print(f"Reading raw parquet from {raw_hdfs_path}")
             raw_df = spark.read.parquet(raw_hdfs_path)
-            curated_df = clean_hvfhv(raw_df)
+            curated_df = clean_yellow_taxi(raw_df, YEAR, month)
 
             print(f"Writing curated parquet -> {curated_path}")
             curated_df.write.mode("overwrite").parquet(curated_path)
