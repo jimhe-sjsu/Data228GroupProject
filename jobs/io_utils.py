@@ -12,26 +12,123 @@ def load_config(path):
         return yaml.safe_load(fh)
 
 def create_spark_session(app_name="NYCTaxiCleaning", config=None):
+    spark_cfg     = (config or {}).get("spark", {})
+    master        = spark_cfg.get("master",             "local[1]")
+    driver_memory = spark_cfg.get("driver_memory",      "2500m")
+    shuffle_parts = spark_cfg.get("shuffle_partitions", 48)
+    default_par   = spark_cfg.get("default_parallelism",48)
+
     builder = (
         SparkSession.builder
         .appName(app_name)
-        .config("spark.sql.parquet.mergeSchema", "false")
-        # disable vectorized reader so Spark uses the Java-based reader
-        # which supports zStandard compression (some 2023 NYC Taxi files use it)
+        .master(master)
+        .config("spark.driver.memory",                      driver_memory)
+        .config("spark.sql.shuffle.partitions",             str(shuffle_parts))
+        .config("spark.default.parallelism",                str(default_par))
+        .config("spark.memory.fraction",                    "0.6")
+        .config("spark.memory.storageFraction",             "0.3")
+        .config("spark.sql.parquet.mergeSchema",            "false")
         .config("spark.sql.parquet.enableVectorizedReader", "false")
     )
+
+    # add cluster-mode configs only when not running locally
+    if not master.startswith("local"):
+        executor_memory = spark_cfg.get("executor_memory", "1500m")
+        executor_cores  = spark_cfg.get("executor_cores",  2)
+        cores_max       = spark_cfg.get("cores_max",       4)
+        builder = (
+            builder
+            .config("spark.executor.memory",            executor_memory)
+            .config("spark.executor.cores",             str(executor_cores))
+            .config("spark.cores.max",                  str(cores_max))
+            .config("spark.network.timeout",            "600s")
+            .config("spark.executor.heartbeatInterval", "60s")
+            .config("spark.rpc.message.maxSize",        "256")
+            .config("spark.executorEnv.PYSPARK_PYTHON", "python3")
+        )
+
     return builder.getOrCreate()
 
-def read_parquet_from_hdfs(spark, paths):
-    # read each path separately then union to avoid cross-year schema conflicts
-    # (e.g. VendorID is bigint in 2022 files, int in 2023 files)
+def list_hdfs_files_recursive(spark, hdfs_dir):
+    """Return all parquet file paths under an HDFS directory (recursive).
+    Returns [] if the directory does not exist.
+    """
+    jvm  = spark._jvm
+    conf = spark._jsc.hadoopConfiguration()
+    fs   = jvm.org.apache.hadoop.fs.FileSystem.get(
+        jvm.java.net.URI(hdfs_dir.split("/user/")[0] + "//"),
+        conf,
+    )
+    path = jvm.org.apache.hadoop.fs.Path(hdfs_dir)
+    # Silently return empty list if the path doesn't exist yet
+    if not fs.exists(path):
+        return []
+    file_iter = fs.listFiles(path, True)
+    results   = []
+    while file_iter.hasNext():
+        status = file_iter.next()
+        p = str(status.getPath())
+        # Skip Spark's internal staging directories and zero-byte temp files
+        if p.endswith(".parquet") and "_temporary" not in p:
+            results.append(p)
+    return results
+
+def count_rows_from_parquet_metadata(spark, individual_files):
+    """Read exact row counts from parquet file footers — no data scan needed."""
+    jvm  = spark._jvm
+    conf = spark._jsc.hadoopConfiguration()
+    ParquetFileReader = jvm.org.apache.parquet.hadoop.ParquetFileReader
+    Path = jvm.org.apache.hadoop.fs.Path
+    total = 0
+    for file_path in individual_files:
+        reader = ParquetFileReader.open(conf, Path(file_path))
+        try:
+            blocks = reader.getFooter().getBlocks()
+            for i in range(blocks.size()):
+                total += blocks[i].getRowCount()
+        finally:
+            reader.close()
+    return total
+
+def _expand_glob(spark, glob_path):  # also importable as a public helper
+    """Return a list of individual HDFS file paths matching a glob."""
+    jvm    = spark._jvm
+    conf   = spark._jsc.hadoopConfiguration()
+    path   = jvm.org.apache.hadoop.fs.Path(glob_path)
+    fs     = path.getFileSystem(conf)
+    statuses = fs.globStatus(path)
+    if statuses is None:
+        return []
+    return [str(s.getPath()) for s in statuses]
+
+def read_parquet_from_hdfs(spark, paths, enforce_fn=None):
+    # Expand every glob to individual file paths and read each file separately.
+    # Spark 3.0 mergeSchema cannot reconcile bigint/int within a glob, and
+    # providing a schema at read time does binary mapping (not a cast), which
+    # also fails on type mismatches.  Reading one file at a time avoids both
+    # problems: each file has a self-consistent schema, and enforce_fn (if given)
+    # applies Spark SQL cast expressions to produce the canonical output schema.
     try:
-        dfs = [spark.read.option("mergeSchema", "false").parquet(p) for p in paths]
+        individual_files = []
+        for glob_path in paths:
+            individual_files.extend(_expand_glob(spark, glob_path))
+
+        if not individual_files:
+            raise RuntimeError(f"No parquet files found for paths: {paths}")
+
+        logger.info(f"Found {len(individual_files)} parquet file(s) to read")
+
+        def _read_one(file_path):
+            df = spark.read.option("mergeSchema", "false").parquet(file_path)
+            if enforce_fn is not None:
+                df = enforce_fn(df)
+            return df
+
+        dfs = [_read_one(f) for f in individual_files]
         result = dfs[0]
         for df in dfs[1:]:
-            # align columns to match the first dataframe before union
             result = result.union(df.select(result.columns))
-        return result
+        return result, individual_files
     except Exception as exc:
         raise RuntimeError(f"Failed to read Parquet from HDFS. Paths: {paths}. Error: {exc}") from exc
 
@@ -86,8 +183,12 @@ def write_cleaning_report(step_log, raw_count, final_count, output_path):
     ]
 
     for idx, entry in enumerate(step_log, start=1):
-        pct = (entry["removed"] / entry["before"] * 100) if entry["before"] > 0 else 0.0
-        lines.append(f"| {idx} | {entry['step']} | {entry['before']:,} | {entry['after']:,} | {entry['removed']:,} | {pct:.2f}% |")
+        b, a, r = entry.get("before"), entry.get("after"), entry.get("removed")
+        if b is not None and r is not None:
+            pct_s = f"{(r / b * 100):.2f}%" if b > 0 else "0.00%"
+            lines.append(f"| {idx} | {entry['step']} | {b:,} | {a:,} | {r:,} | {pct_s} |")
+        else:
+            lines.append(f"| {idx} | {entry['step']} | — | — | — | — |")
 
     total_removed = raw_count - final_count
     total_pct = (total_removed / raw_count * 100) if raw_count > 0 else 0.0

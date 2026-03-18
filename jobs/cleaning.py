@@ -9,13 +9,15 @@ def _log_step(name, before, after):
     logger.info(f"[{name}] before={before} after={after} removed={removed} ({pct:.2f}%)")
     return {"step": name, "before": before, "after": after, "removed": removed}
 
-def audit_nulls(df):
-    null_counts = {}
-    agg_exprs = [F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c) for c in df.columns]
-    row = df.agg(*agg_exprs).collect()[0]
-    for c in df.columns:
-        null_counts[c] = int(row[c])
-    return null_counts
+def audit_nulls(df, cols=None):
+    # limit to specified columns (or all if None)
+    target_cols = cols if cols is not None else df.columns
+    agg_exprs = [
+        F.sum(F.when(F.col(c).isNull(), 1).otherwise(0)).alias(c)
+        for c in target_cols
+    ]
+    row = df.select(target_cols).agg(*agg_exprs).collect()[0]
+    return {c: int(row[c]) for c in target_cols}
 
 def fill_nulls(df):
     fill_map = {
@@ -56,18 +58,17 @@ def filter_invalid_codes(df, vendor_ids, ratecodes, payment_types):
         & F.col("payment_type").isin(payment_types)
     )
 
-def run_all_cleaning_steps(df, config):
+def run_all_cleaning_steps(df, config, raw_count=None):
     thresholds = config["thresholds"]
-    step_log = []
 
-    steps = [
-        ("Filter invalid year", lambda d: filter_invalid_year(d, thresholds["valid_years"])),
+    step_defs = [
+        ("Filter invalid year",   lambda d: filter_invalid_year(d, thresholds["valid_years"])),
         ("Filter impossible trips", lambda d: filter_impossible_trips(d)),
-        ("Filter trip duration", lambda d: filter_trip_duration(d, thresholds["max_trip_duration_hours"])),
-        ("Filter trip distance", lambda d: filter_trip_distance(d, thresholds["max_trip_distance_miles"])),
+        ("Filter trip duration",  lambda d: filter_trip_duration(d, thresholds["max_trip_duration_hours"])),
+        ("Filter trip distance",  lambda d: filter_trip_distance(d, thresholds["max_trip_distance_miles"])),
         ("Filter passenger count", lambda d: filter_passenger_count(d, thresholds["max_passenger_count"])),
-        ("Filter fare amount", lambda d: filter_fare_amount(d, thresholds["min_fare_amount"])),
-        ("Filter invalid codes", lambda d: filter_invalid_codes(
+        ("Filter fare amount",    lambda d: filter_fare_amount(d, thresholds["min_fare_amount"])),
+        ("Filter invalid codes",  lambda d: filter_invalid_codes(
             d,
             thresholds["valid_vendor_ids"],
             thresholds["valid_ratecode_ids"],
@@ -75,10 +76,20 @@ def run_all_cleaning_steps(df, config):
         )),
     ]
 
-    for name, fn in steps:
-        before = df.count()
+    # Apply all filters lazily — zero intermediate count() calls.
+    # The caller is responsible for counting once after caching the result.
+    step_names = []
+    for name, fn in step_defs:
         df = fn(df)
-        after = df.count()
-        step_log.append(_log_step(name, before, after))
+        step_names.append(name)
+        logger.info(f"Applied filter: {name} (lazy — will scan on cache/write)")
 
-    return df, step_log
+    # Build step_log with placeholder counts; caller fills them after cache+count.
+    step_log = [
+        {"step": name, "before": None, "after": None, "removed": None}
+        for name in step_names
+    ]
+    # The last entry gets the overall before→after summary (caller fills "after")
+    step_log[-1]["before"] = raw_count
+
+    return df, step_log, None  # cleaned_count resolved by caller
