@@ -14,9 +14,12 @@ env/
 
 # Local data and outputs
 data/
+output/
 *.parquet
 *.duckdb
 *.csv
+_SUCCESS
+*.crc
 !data/
 !data/taxi_zone_lookup.csv
 
