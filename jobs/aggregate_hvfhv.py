@@ -133,6 +133,16 @@ def build_cleaning_summary(
     return spark.createDataFrame(summary_rows)
 
 
+def add_pickup_time_dimensions(hourly_df: DataFrame) -> DataFrame:
+    return (
+        hourly_df.withColumn("pickup_date", F.to_date("pickup_hour_ts"))
+        .withColumn("pickup_hour", F.hour("pickup_hour_ts"))
+        .withColumn("pickup_weekday_num", F.dayofweek("pickup_hour_ts"))
+        .withColumn("year", F.year("pickup_hour_ts"))
+        .withColumn("month", F.month("pickup_hour_ts"))
+    )
+
+
 def build_hourly_zone_demand(curated_df: DataFrame, zone_lookup_df: DataFrame) -> DataFrame:
     hourly_df = (
         curated_df.withColumn("pickup_hour_ts", F.date_trunc("hour", "pickup_datetime"))
@@ -146,20 +156,21 @@ def build_hourly_zone_demand(curated_df: DataFrame, zone_lookup_df: DataFrame) -
         .join(zone_lookup_df, on="location_id", how="left")
         .orderBy("pickup_hour_ts", "location_id")
     )
-    return hourly_df
+    return add_pickup_time_dimensions(hourly_df)
 
 
 def build_overall_hourly_demand(curated_df: DataFrame) -> DataFrame:
-    return (
+    hourly_df = (
         curated_df.withColumn("pickup_hour_ts", F.date_trunc("hour", "pickup_datetime"))
         .groupBy("pickup_hour_ts")
         .agg(F.count("*").alias("trip_count"))
         .orderBy("pickup_hour_ts")
     )
+    return add_pickup_time_dimensions(hourly_df)
 
 
 def build_borough_hourly_demand(curated_df: DataFrame, zone_lookup_df: DataFrame) -> DataFrame:
-    return (
+    hourly_df = (
         curated_df.withColumn("pickup_hour_ts", F.date_trunc("hour", "pickup_datetime"))
         .withColumnRenamed("PULocationID", "location_id")
         .join(zone_lookup_df, on="location_id", how="left")
@@ -167,6 +178,7 @@ def build_borough_hourly_demand(curated_df: DataFrame, zone_lookup_df: DataFrame
         .agg(F.count("*").alias("trip_count"))
         .orderBy("pickup_hour_ts", "borough")
     )
+    return add_pickup_time_dimensions(hourly_df)
 
 
 def build_weekday_weekend_demand(curated_df: DataFrame) -> DataFrame:
