@@ -1,6 +1,8 @@
-# NYC TLC HVFHV Group Project
+# NYC TLC Taxi Group Project
 
-This repository is the clean starting point for a DATA 228 group project based on the NYC TLC High Volume For-Hire Vehicle (HVFHV) 2023 dataset.
+This repository contains two separate Spark pipelines for a DATA 228 group project:
+- NYC TLC HVFHV 2023 trip records
+- NYC TLC Yellow Taxi 2023 trip records
 
 The intended stack is:
 - HDFS for distributed storage
@@ -59,25 +61,44 @@ Inside the container, the project files will be available at `/workspace`.
 
 ## Spark Workflow
 
-Spark jobs:
+This repo now keeps the two datasets as separate code paths.
+
+### HVFHV pipeline
+
 - [`jobs/ingest_hvfhv.py`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/jobs/ingest_hvfhv.py)
-  downloads the current hardcoded TLC month list, uploads the raw parquet to HDFS, and writes a cleaned curated parquet layer back to HDFS
 - [`jobs/aggregate_hvfhv.py`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/jobs/aggregate_hvfhv.py)
-  reads the curated HDFS layer, joins the taxi zone lookup, and writes analytical outputs to HDFS plus notebook-friendly exports under `output/eda/`
+- [`notebooks/hvfhv_eda.ipynb`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/notebooks/hvfhv_eda.ipynb)
+
+### Yellow Taxi pipeline
+
+- [`jobs/ingest_yellow_taxi.py`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/jobs/ingest_yellow_taxi.py)
+- [`jobs/aggregate_yellow_taxi.py`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/jobs/aggregate_yellow_taxi.py)
+- [`notebooks/yellow_taxi_eda.ipynb`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/notebooks/yellow_taxi_eda.ipynb)
 
 For the first runnable pass, year/month selection and HDFS paths are defined directly at the top of each Spark script. No separate pipeline config is required.
 
 Required reference file:
 - [`data/taxi_zone_lookup.csv`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/data/taxi_zone_lookup.csv)
 
-Run the jobs from the Spark container:
+Run the jobs from the Spark container.
+
+HVFHV:
 
 ```bash
 docker compose exec spark-master bash -lc 'PYSPARK_PYTHON=python3 PYSPARK_DRIVER_PYTHON=python3 /spark/bin/spark-submit /workspace/jobs/ingest_hvfhv.py'
 docker compose exec spark-master bash -lc 'PYSPARK_PYTHON=python3 PYSPARK_DRIVER_PYTHON=python3 /spark/bin/spark-submit /workspace/jobs/aggregate_hvfhv.py'
 ```
 
-The EDA notebook will read the exported outputs locally from `output/eda/`.
+Yellow Taxi:
+
+```bash
+docker compose exec spark-master bash -lc 'PYSPARK_PYTHON=python3 PYSPARK_DRIVER_PYTHON=python3 /spark/bin/spark-submit /workspace/jobs/ingest_yellow_taxi.py'
+docker compose exec spark-master bash -lc 'PYSPARK_PYTHON=python3 PYSPARK_DRIVER_PYTHON=python3 /spark/bin/spark-submit /workspace/jobs/aggregate_yellow_taxi.py'
+```
+
+Each EDA notebook reads the exported outputs from its own local folder:
+- HVFHV: `output/eda/hvfhv/`
+- Yellow Taxi: `output/eda/yellow/`
 
 ## Local Notebook Setup
 
@@ -92,13 +113,14 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements-notebook.txt
 ```
 
-Then open the notebook:
+Then open the notebook you want:
 
 ```bash
 python3 -m jupyter notebook notebooks/hvfhv_eda.ipynb
+python3 -m jupyter notebook notebooks/yellow_taxi_eda.ipynb
 ```
 
-If you prefer VS Code, you can open [`notebooks/hvfhv_eda.ipynb`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/notebooks/hvfhv_eda.ipynb) directly after selecting the `.venv` interpreter.
+If you prefer VS Code, you can open either notebook directly after selecting the `.venv` interpreter.
 
 ### MySQL connection settings
 
