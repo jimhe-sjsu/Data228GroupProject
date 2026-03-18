@@ -36,17 +36,29 @@ def plot_row_counts_by_step(step_log, output_dir):
     _ensure_dir(output_dir)
     filepath = os.path.join(output_dir, "row_counts_by_step.png")
 
-    labels = ["Raw"] + [s["step"] for s in step_log]
-    counts = [step_log[0]["before"]] + [s["after"] for s in step_log]
+    # Collect only entries that have actual counts
+    valid_entries = [s for s in step_log if s.get("before") is not None]
+
+    if valid_entries:
+        labels = ["Raw"] + [s["step"] for s in valid_entries]
+        counts = [valid_entries[0]["before"]] + [s["after"] for s in valid_entries]
+    else:
+        # Fallback: single bar chart showing before vs after overall
+        summary = next((s for s in reversed(step_log) if s.get("after") is not None), None)
+        if summary is None:
+            return filepath
+        labels = ["Raw", "After All Cleaning"]
+        counts = [summary["before"], summary["after"]]
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(labels, counts, marker="o", linewidth=2, color="#2c7fb8")
     ax.fill_between(range(len(counts)), counts, alpha=0.15, color="#2c7fb8")
     ax.set_ylabel("Row Count")
-    ax.set_title("Row Count After Each Cleaning Step")
+    ax.set_title("Row Count Before and After Cleaning Steps")
     plt.xticks(rotation=35, ha="right")
     for i, c in enumerate(counts):
-        ax.annotate(f"{c:,}", (i, c), textcoords="offset points", xytext=(0, 10), ha="center", fontsize=8)
+        if c is not None:
+            ax.annotate(f"{c:,}", (i, c), textcoords="offset points", xytext=(0, 10), ha="center", fontsize=8)
     fig.tight_layout()
     fig.savefig(filepath, dpi=150)
     plt.close(fig)
