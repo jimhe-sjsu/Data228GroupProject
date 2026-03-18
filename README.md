@@ -12,7 +12,6 @@ The first milestone is repository setup only. Docker, data ingestion, and Spark 
 ## Planned Structure
 
 - `jobs/` for PySpark batch scripts
-- `notebooks/` for local EDA notebooks reading exported Spark outputs
 - `sql/` for MySQL schema files and analysis queries
 - `docs/` for project notes and report material
 - `config/` for Hadoop and MySQL environment files used by Docker Compose
@@ -56,49 +55,6 @@ docker compose exec spark-master bash
 ```
 
 Inside the container, the project files will be available at `/workspace`.
-
-## Spark Workflow
-
-Spark jobs:
-- [`jobs/ingest_hvfhv.py`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/jobs/ingest_hvfhv.py)
-  downloads the current hardcoded TLC month list, uploads the raw parquet to HDFS, and writes a cleaned curated parquet layer back to HDFS
-- [`jobs/aggregate_hvfhv.py`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/jobs/aggregate_hvfhv.py)
-  reads the curated HDFS layer, joins the taxi zone lookup, and writes analytical outputs to HDFS plus notebook-friendly exports under `output/eda/`
-
-For the first runnable pass, year/month selection and HDFS paths are defined directly at the top of each Spark script. No separate pipeline config is required.
-
-Required reference file:
-- [`data/taxi_zone_lookup.csv`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/data/taxi_zone_lookup.csv)
-
-Run the jobs from the Spark container:
-
-```bash
-docker compose exec spark-master bash -lc 'PYSPARK_PYTHON=python3 PYSPARK_DRIVER_PYTHON=python3 /spark/bin/spark-submit /workspace/jobs/ingest_hvfhv.py'
-docker compose exec spark-master bash -lc 'PYSPARK_PYTHON=python3 PYSPARK_DRIVER_PYTHON=python3 /spark/bin/spark-submit /workspace/jobs/aggregate_hvfhv.py'
-```
-
-The EDA notebook will read the exported outputs locally from `output/eda/`.
-
-## Local Notebook Setup
-
-The notebook is intended to run locally, not inside the Spark container.
-
-Create a local virtual environment and install the notebook dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements-notebook.txt
-```
-
-Then open the notebook:
-
-```bash
-python3 -m jupyter notebook notebooks/hvfhv_eda.ipynb
-```
-
-If you prefer VS Code, you can open [`notebooks/hvfhv_eda.ipynb`](/Users/jimhe/Documents/sjsu/DATA228/Data228GroupProject/notebooks/hvfhv_eda.ipynb) directly after selecting the `.venv` interpreter.
 
 ### MySQL connection settings
 
