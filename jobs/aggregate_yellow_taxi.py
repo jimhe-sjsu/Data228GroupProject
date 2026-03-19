@@ -214,6 +214,41 @@ def build_trip_metrics_by_hour(curated_df: DataFrame) -> DataFrame:
     return curated_df.groupBy("pickup_hour").agg(*aggregations).orderBy("pickup_hour")
 
 
+def build_zone_demand_variability(
+    curated_df: DataFrame, zone_lookup_df: DataFrame
+) -> DataFrame:
+    hourly_zone = (
+        curated_df.withColumn("pickup_hour_ts", F.date_trunc("hour", "pickup_datetime"))
+        .groupBy("PULocationID", "pickup_hour_ts")
+        .agg(F.count("*").alias("trip_count"))
+    )
+
+    return (
+        hourly_zone.groupBy("PULocationID")
+        .agg(
+            F.avg("trip_count").alias("mean_hourly_demand"),
+            F.stddev_samp("trip_count").alias("std_hourly_demand"),
+            F.min("trip_count").alias("min_hourly_demand"),
+            F.max("trip_count").alias("max_hourly_demand"),
+            F.expr("percentile_approx(trip_count, 0.5)").alias(
+                "median_hourly_demand"
+            ),
+            F.count("*").alias("observed_hours"),
+        )
+        .withColumnRenamed("PULocationID", "location_id")
+        .join(zone_lookup_df, on="location_id", how="left")
+        .withColumn(
+            "std_hourly_demand",
+            F.coalesce(F.col("std_hourly_demand"), F.lit(0.0)),
+        )
+        .withColumn(
+            "coefficient_of_variation",
+            F.when(F.col("mean_hourly_demand") > 0, F.col("std_hourly_demand") / F.col("mean_hourly_demand")).otherwise(F.lit(0.0)),
+        )
+        .orderBy(F.desc("std_hourly_demand"), "location_id")
+    )
+
+
 def build_top_pickup_zones(curated_df: DataFrame, zone_lookup_df: DataFrame) -> DataFrame:
     return (
         curated_df.groupBy("PULocationID")
@@ -284,6 +319,9 @@ def main() -> None:
             "weekday_weekend_demand": build_weekday_weekend_demand(curated_df),
             "weekday_hourly_demand": build_weekday_hourly_demand(curated_df),
             "trip_metrics_by_hour": build_trip_metrics_by_hour(curated_df),
+            "zone_demand_variability": build_zone_demand_variability(
+                curated_df, zone_lookup_df
+            ),
             "top_pickup_zones": build_top_pickup_zones(curated_df, zone_lookup_df),
             "top_dropoff_zones": build_top_dropoff_zones(curated_df, zone_lookup_df),
         }
