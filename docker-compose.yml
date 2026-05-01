@@ -12,7 +12,7 @@ services:
     env_file:
       - ./config/hadoop.env
     volumes:
-      - namenode_data:/hadoop/dfs/name
+      - namenode_new_data:/hadoop/dfs/name
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
@@ -80,7 +80,7 @@ services:
       - namenode
       - datanode
     ports:
-      - "8080:8080"
+      - "8180:8080"
       - "7077:7077"
     environment:
       INIT_DAEMON_STEP: setup_spark
@@ -117,7 +117,7 @@ services:
       retries: 10
 
 volumes:
-  namenode_data:
+  namenode_new_data:
   datanode_data:
   historyserver_data:
   mysql_data:
