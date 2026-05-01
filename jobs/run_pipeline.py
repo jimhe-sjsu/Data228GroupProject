@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import logging
 import os
 import sys
@@ -53,7 +54,7 @@ def _process_one_file(spark, file_path, config, canonical_schema, output_file_pa
     df = run_feature_engineering(df)
 
     # single-partition write (no shuffle/sort) — streaming row-group buffer ≤ 128 MB
-    df.coalesce(1).write.mode("overwrite").parquet(output_file_path)
+    df.coalesce(1).write.mode("overwrite").option("compression", "snappy").parquet(output_file_path)
 
     # Aggressive cleanup between files to prevent cumulative JVM memory growth:
     # drop Spark plan/codegen caches, then request both Python and JVM full GC.
@@ -72,7 +73,7 @@ def main():
         canonical_schema = get_canonical_schema()
         output_path = config["hdfs"]["output_path"]
 
-        # ── Enumerate raw files ──────────────────────────────────────────────
+        #  Enumerate raw files 
         individual_files = []
         for glob_path in config["hdfs"]["input_paths"]:
             individual_files.extend(_expand_glob(spark, glob_path))
@@ -82,11 +83,11 @@ def main():
 
         logger.info(f"Found {len(individual_files)} raw parquet file(s)")
 
-        # ── Raw row count from footer metadata (instant, no data scan) ───────
+        # Raw row count from footer metadata (instant, no data scan) 
         raw_count = count_rows_from_parquet_metadata(spark, individual_files)
         logger.info(f"Raw row count (from metadata): {raw_count:,}")
 
-        # ── Null audit & before-samples from first file only ─────────────────
+        #  Null audit & before-samples from first file only 
         #    Limits memory: one file plan, 10 % sample, 5 columns
         first_df = spark.read.option("mergeSchema", "false").parquet(individual_files[0])
         first_df = enforce_schema(first_df, canonical_schema)
@@ -105,17 +106,17 @@ def main():
                 first_df.select("fare_amount").sample(False, 0.05, seed=42).toPandas()
             )
 
-        # Free the first-file plan before the main loop
+        # Free the firstfile plan before the main loop
         spark.catalog.clearCache()
         del first_df
 
-        # ── Main processing loop — one file at a time ─────────────────────────
+        #  Main processing loop — one file at a time 
         #    Each input month file becomes one output parquet file in output_path/.
         #    This avoids any cross-file union plan and the sort-for-dynamic-partition
         #    that is required when using partitionBy (which causes Docker OOM).
         for idx, file_path in enumerate(individual_files):
             fname = os.path.basename(file_path)
-            # e.g. yellow_tripdata_2022-01.parquet → cleaned/yellow_tripdata_2022-01/
+            # e.g. yellow_tripdata_2022-01.parquet -> cleaned/yellow_tripdata_2022-01/
             stem = os.path.splitext(fname)[0]
             output_file_path = f"{output_path}/{stem}"
 
@@ -128,14 +129,14 @@ def main():
                 continue
 
             logger.info(
-                f"[{idx+1}/{len(individual_files)}] Processing {fname} → {stem}"
+                f"[{idx+1}/{len(individual_files)}] Processing {fname} ->{stem}"
             )
             _process_one_file(
                 spark, file_path, config, canonical_schema, output_file_path
             )
             logger.info(f"[{idx+1}/{len(individual_files)}] Done: {fname}")
 
-        # ── Cleaned row count from output footer metadata ─────────────────────
+        #  Cleaned row count from output footer metadata 
         out_files     = list_hdfs_files_recursive(spark, output_path)
         cleaned_count = count_rows_from_parquet_metadata(spark, out_files)
         logger.info(f"Cleaned row count (from output metadata): {cleaned_count:,}")
@@ -150,7 +151,7 @@ def main():
             }
         ]
 
-        # ── After-cleaning samples for charts ─────────────────────────────────
+        #After cleaning samples for charts
         # The cleaned output lives in named subdirs (yellow_tripdata_2022-01/...),
         # so read via glob to let Spark find the actual parquet files.
         cleaned_glob = f"{output_path}/yellow_tripdata_*"
@@ -163,14 +164,14 @@ def main():
                 cleaned_df.select("fare_amount").sample(False, 0.01, seed=42).toPandas()
             )
 
-        # ── MySQL sink (optional — skip gracefully if unavailable) ────────────
+        #MySQL sink (optional — skip gracefully if unavailable) 
         try:
             cleaned_df_for_mysql = spark.read.option("mergeSchema", "false").parquet(cleaned_glob)
             write_to_mysql(cleaned_df_for_mysql, config)
         except Exception as exc:
             logger.warning(f"MySQL write skipped: {exc}")
 
-        # ── Charts ────────────────────────────────────────────────────────────
+        #  Charts 
         if HAS_MATPLOTLIB:
             charts_dir = config["charts"]["output_dir"]
             plot_null_counts(null_dict, charts_dir)
@@ -179,7 +180,7 @@ def main():
             plot_fare_distribution(before_fare_sample, after_fare_sample, charts_dir)
             logger.info(f"Charts saved to {charts_dir}")
 
-        # ── Cleaning report ───────────────────────────────────────────────────
+        #  Cleaning report 
         report_path = config["cleaning_report"]["output_path"]
         write_cleaning_report(step_log, raw_count, cleaned_count, report_path)
 
