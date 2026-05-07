@@ -15,10 +15,10 @@ def load_config(path):
 
 def create_spark_session(app_name="NYCTaxiCleaning", config=None):
     spark_cfg = (config or {}).get("spark", {})
-    master = spark_cfg.get("master", "local[1]")
-    driver_memory = spark_cfg.get("driver_memory", "2500m")
-    shuffle_parts = spark_cfg.get("shuffle_partitions", 48)
-    default_par = spark_cfg.get("default_parallelism", 48)
+    master = os.environ.get("SPARK_MASTER_URL", spark_cfg.get("master", "local[1]"))
+    driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", spark_cfg.get("driver_memory", "2500m"))
+    shuffle_parts = os.environ.get("SPARK_SHUFFLE_PARTITIONS", spark_cfg.get("shuffle_partitions", 48))
+    default_par = os.environ.get("SPARK_DEFAULT_PARALLELISM", spark_cfg.get("default_parallelism", 48))
 
     builder = (
         SparkSession.builder
@@ -38,9 +38,9 @@ def create_spark_session(app_name="NYCTaxiCleaning", config=None):
     )
 
     if not master.startswith("local"):
-        executor_memory = spark_cfg.get("executor_memory", "1500m")
-        executor_cores = spark_cfg.get("executor_cores", 2)
-        cores_max = spark_cfg.get("cores_max", 4)
+        executor_memory = os.environ.get("SPARK_EXECUTOR_MEMORY", spark_cfg.get("executor_memory", "1500m"))
+        executor_cores = os.environ.get("SPARK_EXECUTOR_CORES", spark_cfg.get("executor_cores", 2))
+        cores_max = os.environ.get("SPARK_CORES_MAX", spark_cfg.get("cores_max", 4))
         builder = (
             builder
             .config("spark.executor.memory", executor_memory)

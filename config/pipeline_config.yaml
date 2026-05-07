@@ -12,11 +12,28 @@ spark:
 
 hdfs:
   input_paths:
-    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_tripdata_2022-*.parquet"
-    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_tripdata_2023-*.parquet"
-  output_path: "hdfs://namenode:9000/user/data/nyc_taxi/cleaned"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_2023-*.parquet"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_2024-*.parquet"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_2025-*.parquet"
+  output_path: "hdfs://namenode:9000/user/data/nyc_taxi/cleaned/yellow_taxi"
   partition_cols:
     - "pickup_month"
+
+hvfhv:
+  input_paths:
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/hvfhv/fhvhv_tripdata_2023-*.parquet"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/hvfhv/fhvhv_tripdata_2024-*.parquet"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/hvfhv/fhvhv_tripdata_2025-*.parquet"
+  output_path: "hdfs://namenode:9000/user/data/nyc_taxi/cleaned/fhvhv"
+  cleaning_report_path: "/workspace/docs/hvfhv_cleaning_report.md"
+  valid_years:
+    - 2023
+    - 2024
+    - 2025
+  max_trip_miles: 100
+  min_trip_seconds: 60
+  max_trip_seconds: 10800
+  min_base_passenger_fare: 0.01
 
 mysql:
   host: "mysql"
@@ -34,8 +51,9 @@ thresholds:
   min_fare_amount: 0.01
   max_trip_duration_hours: 3
   valid_years:
-    - 2022
     - 2023
+    - 2024
+    - 2025
   valid_vendor_ids:
     - 1
     - 2

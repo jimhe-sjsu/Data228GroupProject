@@ -4,11 +4,11 @@
 
 | # | Step | Rows Before | Rows After | Rows Removed | % Removed |
 |---|------|-------------|------------|--------------|-----------|
-| 1 | All cleaning filters combined | 77,966,324 | 72,089,409 | 5,876,915 | 7.54% |
+| 1 | All cleaning filters combined | 128,202,548 | 105,881,725 | 22,320,823 | 17.41% |
 
 ## Summary
 
-- **Raw rows in:** 77,966,324
-- **Cleaned rows out:** 72,089,409
-- **Total rows removed:** 5,876,915
-- **Overall reduction:** 7.54%
+- **Raw rows in:** 128,202,548
+- **Cleaned rows out:** 105,881,725
+- **Total rows removed:** 22,320,823
+- **Overall reduction:** 17.41%

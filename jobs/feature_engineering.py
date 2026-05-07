@@ -5,21 +5,36 @@ logger = logging.getLogger(__name__)
 
 def add_trip_duration(df):
     duration_seconds = F.col("tpep_dropoff_datetime").cast("long") - F.col("tpep_pickup_datetime").cast("long")
-    return df.withColumn("trip_duration_mins", F.round(duration_seconds / 60.0, 2))
+    return (
+        df.withColumn("trip_duration_seconds", duration_seconds.cast("double"))
+        .withColumn("trip_duration_mins", F.round(F.col("trip_duration_seconds") / 60.0, 2))
+    )
 
 def add_time_features(df):
     return (
-        df.withColumn("pickup_hour", F.hour(F.col("tpep_pickup_datetime")))
-        .withColumn("pickup_day_of_week", F.dayofweek(F.col("tpep_pickup_datetime")))
-        .withColumn("pickup_month", F.month(F.col("tpep_pickup_datetime")))
-        .withColumn("is_weekend", F.dayofweek(F.col("tpep_pickup_datetime")).isin([1, 7]))
+        df.withColumn("pickup_datetime", F.col("tpep_pickup_datetime").cast("timestamp"))
+        .withColumn("dropoff_datetime", F.col("tpep_dropoff_datetime").cast("timestamp"))
+        .withColumn("pickup_hour_ts", F.date_trunc("hour", F.col("pickup_datetime")))
+        .withColumn("pickup_date", F.to_date(F.col("pickup_datetime")))
+        .withColumn("pickup_hour", F.hour(F.col("pickup_datetime")))
+        .withColumn("pickup_year", F.year(F.col("pickup_datetime")))
+        .withColumn("pickup_day_of_week", F.dayofweek(F.col("pickup_datetime")))
+        .withColumn("pickup_month", F.month(F.col("pickup_datetime")))
+        .withColumn("is_weekend", F.dayofweek(F.col("pickup_datetime")).isin([1, 7]))
+    )
+
+def add_standardized_fields(df):
+    return (
+        df.withColumn("source_id", F.lit(0).cast("int"))
+        .withColumn("source_name", F.lit("yellow"))
+        .withColumn("trip_miles", F.col("trip_distance").cast("double"))
     )
 
 def add_speed(df):
-    hours = F.col("trip_duration_mins") / 60.0
+    hours = F.col("trip_duration_seconds") / 3600.0
     return df.withColumn(
         "speed_mph",
-        F.when(hours > 0, F.round(F.col("trip_distance") / hours, 2)).otherwise(None)
+        F.when(hours > 0, F.round(F.col("trip_miles") / hours, 2)).otherwise(None)
     )
 
 def add_label_columns(df):
@@ -63,6 +78,7 @@ def add_label_columns(df):
 def run_feature_engineering(df):
     df = add_trip_duration(df)
     df = add_time_features(df)
+    df = add_standardized_fields(df)
     df = add_speed(df)
     df = add_label_columns(df)
     return df
