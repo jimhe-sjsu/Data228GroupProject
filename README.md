@@ -243,7 +243,7 @@ docker compose exec \
   -e PYSPARK_DRIVER_PYTHON=python3 \
   spark-master \
   /opt/spark/bin/spark-submit \
-  --master 'local[1]' \
+  --master 'local[*]' \
   --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2 \
   --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
   /workspace/jobs/build_taxi_demand_ml_to_iceberg.py
@@ -286,7 +286,47 @@ docker compose exec \
 
 By default, `ml_local.py` trains on 2023-2024 and tests on 2025.
 
-### 5. Check the results
+### 5. Open the Spark MLlib demo notebook
+
+The ML demo notebook is at `notebooks/taxi_demand_mllib_demo.ipynb`. For Iceberg mode, run it from the Spark container so the notebook can reach HDFS using the Docker service names.
+
+Rebuild and restart the Spark containers after Dockerfile or Compose changes:
+
+```bash
+docker compose build spark-master spark-worker
+docker compose up -d --force-recreate spark-master spark-worker datanode
+```
+
+Start Jupyter inside `spark-master`:
+
+```bash
+docker compose exec spark-master bash -lc '
+cd /workspace &&
+python3 -m notebook \
+  --ip=0.0.0.0 \
+  --port=8888 \
+  --no-browser \
+  --NotebookApp.token=data228 \
+  --NotebookApp.password="" \
+  --allow-root
+'
+```
+
+Open the notebook server:
+
+```text
+http://127.0.0.1:8888/?token=data228
+```
+
+Then open:
+
+```text
+notebooks/taxi_demand_mllib_demo.ipynb
+```
+
+Use `INPUT_MODE = "iceberg"` when the local Docker/HDFS/Iceberg stack is running. To share the demo with a teammate who does not have the Iceberg table, send `output/taxi_demand_ml_parquet.zip`; after unzipping it into the project root, they can use `INPUT_MODE = "parquet"`.
+
+### 6. Check the results
 
 Open the HDFS web UI at **http://localhost:9871** and browse to `/user/data/nyc_taxi/cleaned/` to see the dataset folders.
 

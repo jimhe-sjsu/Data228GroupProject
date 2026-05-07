@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 
+from pyspark import StorageLevel
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
@@ -250,14 +251,17 @@ def build_curated_feature_profile(df):
 
 def build_ml_table(df):
     return (
-        df.groupBy(
+        df.withColumn("pickup_day", F.dayofmonth(F.col("pickup_date")))
+        .groupBy(
             "source_id",
             "source_name",
             "PULocationID",
+            "pickup_date",
             "pickup_year",
+            "pickup_month",
+            "pickup_day",
             "pickup_hour",
             "pickup_day_of_week",
-            "pickup_month",
             "is_weekend",
         )
         .agg(F.count("*").alias("trip_count"))
@@ -363,30 +367,35 @@ def write_ml_csv_export(ml_df):
 def main():
     config = load_config(CONFIG_PATH)
     spark = create_spark_session()
+    df = None
+    ml_df = None
 
     try:
         logger.info("Reading standardized cleaned Yellow Taxi and HVFHV data")
         df = read_standardized_cleaned_data(spark)
+        logger.info("Skipping cleaned dataframe disk cache for ML-only build")
         zones = read_zone_lookup(spark)
 
-        ml_df = build_ml_table(df)
+        ml_df = build_ml_table(df).persist(StorageLevel.MEMORY_AND_DISK)
         write_iceberg_table(ml_df, ML_ICEBERG_TABLE)
         write_ml_csv_export(ml_df)
+        ml_df.unpersist()
+        ml_df = None
 
-        eda_outputs = {
-            "cleaning_summary": build_cleaning_summary(spark, df, config),
-            "curated_feature_profile": build_curated_feature_profile(df),
-            "overall_hourly_demand": build_overall_hourly_demand(df),
-            "borough_hourly_demand": build_borough_hourly_demand(df, zones),
-            "weekday_weekend_demand": build_weekday_weekend_demand(df),
-            "weekday_hourly_demand": build_weekday_hourly_demand(df),
-            "trip_metrics_by_hour": build_trip_metrics_by_hour(df),
-            "top_pickup_zones": build_top_zones(df, zones, "PULocationID"),
-            "top_dropoff_zones": build_top_zones(df, zones, "DOLocationID"),
-        }
+        # eda_outputs = {
+        #     "cleaning_summary": build_cleaning_summary(spark, df, config),
+        #     "curated_feature_profile": build_curated_feature_profile(df),
+        #     "overall_hourly_demand": build_overall_hourly_demand(df),
+        #     "borough_hourly_demand": build_borough_hourly_demand(df, zones),
+        #     "weekday_weekend_demand": build_weekday_weekend_demand(df),
+        #     "weekday_hourly_demand": build_weekday_hourly_demand(df),
+        #     "trip_metrics_by_hour": build_trip_metrics_by_hour(df),
+        #     "top_pickup_zones": build_top_zones(df, zones, "PULocationID"),
+        #     "top_dropoff_zones": build_top_zones(df, zones, "DOLocationID"),
+        # }
 
-        for name, table in EDA_TABLES.items():
-            write_iceberg_table(eda_outputs[name], table)
+        # for name, table in EDA_TABLES.items():
+        #     write_iceberg_table(eda_outputs[name], table)
 
         print("\n===== ICEBERG BUILD COMPLETE =====")
         print("ML table: {}".format(ML_ICEBERG_TABLE))
@@ -395,6 +404,10 @@ def main():
             print(" - {}".format(table))
 
     finally:
+        if ml_df is not None:
+            ml_df.unpersist()
+        if df is not None:
+            df.unpersist()
         spark.stop()
 
 

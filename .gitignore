@@ -14,7 +14,8 @@ env/
 
 # Local data and outputs
 data/
-output/
+output/*
+!output/taxi_demand_ml_parquet.zip
 *.parquet
 *.duckdb
 *.csv
@@ -27,6 +28,7 @@ _SUCCESS
 spark-warehouse/
 metastore_db/
 derby.log
+hs_err_pid*.log
 
 # Local temp files
 tmp/

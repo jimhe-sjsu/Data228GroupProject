@@ -3,9 +3,9 @@
 # ─────────────────────────────────────────────────────────────
 
 # Balanced tuning for MacBook M3 16GB / Docker 8GB
-# local[4]: driver IS executor — avoids dual-executor OOM in constrained Docker
+# local[*]: driver IS executor — uses available local cores in constrained Docker
 spark:
-  master: "local[1]"
+  master: "local[*]"
   driver_memory: "2500m"
   shuffle_partitions: 12
   default_parallelism: 12
