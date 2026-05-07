@@ -8,7 +8,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("run_pipeline")
+logger = logging.getLogger("run_yellow_taxi_clean_pipeline")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
@@ -19,13 +19,13 @@ from io_utils import (
     load_config, create_spark_session,
     _expand_glob,
     count_rows_from_parquet_metadata, list_hdfs_files_recursive,
-    write_parquet_to_hdfs, write_to_mysql, write_cleaning_report
+    write_cleaning_report,
 )
 
 try:
     from visualizations import (
         plot_null_counts, plot_row_counts_by_step,
-        plot_trip_distance_histogram, plot_fare_distribution
+        plot_trip_distance_histogram,
     )
     HAS_MATPLOTLIB = True
 except ImportError:
@@ -38,6 +38,39 @@ _NULL_AUDIT_COLS = [
     "passenger_count", "RatecodeID",
     "congestion_surcharge", "airport_fee", "store_and_fwd_flag",
 ]
+
+_STANDARDIZED_OUTPUT_COLS = [
+    "source_id",
+    "source_name",
+    "pickup_datetime",
+    "dropoff_datetime",
+    "pickup_hour_ts",
+    "pickup_date",
+    "pickup_year",
+    "pickup_month",
+    "pickup_hour",
+    "pickup_day_of_week",
+    "is_weekend",
+    "PULocationID",
+    "DOLocationID",
+    "trip_duration_seconds",
+    "trip_duration_mins",
+    "trip_miles",
+    "speed_mph",
+]
+
+
+def _output_has_standardized_columns(spark, output_file_path):
+    existing_cols = (
+        spark.read.option("mergeSchema", "false").parquet(output_file_path).columns
+    )
+    if existing_cols != _STANDARDIZED_OUTPUT_COLS:
+        logger.info(
+            "Existing output %s does not exactly match standardized columns",
+            output_file_path,
+        )
+        return False
+    return True
 
 
 def _process_one_file(spark, file_path, config, canonical_schema, output_file_path):
@@ -52,9 +85,10 @@ def _process_one_file(spark, file_path, config, canonical_schema, output_file_pa
     df = fill_nulls(df)
     df, _, _ = run_all_cleaning_steps(df, config)
     df = run_feature_engineering(df)
+    df = df.select(*_STANDARDIZED_OUTPUT_COLS)
 
-    # single-partition write (no shuffle/sort) — streaming row-group buffer ≤ 128 MB
-    df.coalesce(1).write.mode("overwrite").option("compression", "snappy").parquet(output_file_path)
+    # Keep each monthly output independent so the job can resume safely.
+    df.write.mode("overwrite").option("compression", "snappy").parquet(output_file_path)
 
     # Aggressive cleanup between files to prevent cumulative JVM memory growth:
     # drop Spark plan/codegen caches, then request both Python and JVM full GC.
@@ -102,9 +136,6 @@ def main():
             before_distance_sample = (
                 first_df.select("trip_distance").sample(False, 0.05, seed=42).toPandas()
             )
-            before_fare_sample = (
-                first_df.select("fare_amount").sample(False, 0.05, seed=42).toPandas()
-            )
 
         # Free the firstfile plan before the main loop
         spark.catalog.clearCache()
@@ -116,17 +147,21 @@ def main():
         #    that is required when using partitionBy (which causes Docker OOM).
         for idx, file_path in enumerate(individual_files):
             fname = os.path.basename(file_path)
-            # e.g. yellow_tripdata_2022-01.parquet -> cleaned/yellow_tripdata_2022-01/
+            # e.g. yellow_tripdata_2023-01.parquet -> cleaned/yellow_taxi/yellow_tripdata_2023-01/
             stem = os.path.splitext(fname)[0]
             output_file_path = f"{output_path}/{stem}"
 
             # Resume support: skip files already written to HDFS
             already_done = list_hdfs_files_recursive(spark, output_file_path)
-            if already_done:
+            if already_done and _output_has_standardized_columns(spark, output_file_path):
                 logger.info(
                     f"[{idx+1}/{len(individual_files)}] Skipping {fname} (already in HDFS)"
                 )
                 continue
+            if already_done:
+                logger.info(
+                    f"[{idx+1}/{len(individual_files)}] Reprocessing {fname} to refresh standardized columns"
+                )
 
             logger.info(
                 f"[{idx+1}/{len(individual_files)}] Processing {fname} ->{stem}"
@@ -152,24 +187,16 @@ def main():
         ]
 
         #After cleaning samples for charts
-        # The cleaned output lives in named subdirs (yellow_tripdata_2022-01/...),
+        # The cleaned output lives in named subdirs (yellow_tripdata_2023-01/...),
         # so read via glob to let Spark find the actual parquet files.
         cleaned_glob = f"{output_path}/yellow_tripdata_*"
         if HAS_MATPLOTLIB:
             cleaned_df = spark.read.option("mergeSchema", "false").parquet(cleaned_glob)
             after_distance_sample = (
-                cleaned_df.select("trip_distance").sample(False, 0.01, seed=42).toPandas()
+                cleaned_df.selectExpr("trip_miles AS trip_distance")
+                .sample(False, 0.01, seed=42)
+                .toPandas()
             )
-            after_fare_sample = (
-                cleaned_df.select("fare_amount").sample(False, 0.01, seed=42).toPandas()
-            )
-
-        #MySQL sink (optional — skip gracefully if unavailable) 
-        try:
-            cleaned_df_for_mysql = spark.read.option("mergeSchema", "false").parquet(cleaned_glob)
-            write_to_mysql(cleaned_df_for_mysql, config)
-        except Exception as exc:
-            logger.warning(f"MySQL write skipped: {exc}")
 
         #  Charts 
         if HAS_MATPLOTLIB:
@@ -177,7 +204,6 @@ def main():
             plot_null_counts(null_dict, charts_dir)
             plot_row_counts_by_step(step_log, charts_dir)
             plot_trip_distance_histogram(before_distance_sample, after_distance_sample, charts_dir)
-            plot_fare_distribution(before_fare_sample, after_fare_sample, charts_dir)
             logger.info(f"Charts saved to {charts_dir}")
 
         #  Cleaning report 

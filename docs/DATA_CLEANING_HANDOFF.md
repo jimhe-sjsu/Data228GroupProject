@@ -104,12 +104,15 @@ The cleaned output is stored in **HDFS** inside the Docker cluster — it is not
 hdfs://namenode:9000/user/data/nyc_taxi/cleaned/
 ```
 
-It is split into one folder per month:
+Yellow Taxi and HVFHV each have their own folder. Each dataset folder is split into one folder per month:
 ```
-cleaned/yellow_tripdata_2022-01/part-00000-*.snappy.parquet
-cleaned/yellow_tripdata_2022-02/part-00000-*.snappy.parquet
+cleaned/yellow_taxi/yellow_tripdata_2023-01/part-*.snappy.parquet
+cleaned/yellow_taxi/yellow_tripdata_2023-02/part-*.snappy.parquet
 ...
-cleaned/yellow_tripdata_2023-12/part-00000-*.snappy.parquet
+cleaned/yellow_taxi/yellow_tripdata_2025-12/part-*.snappy.parquet
+cleaned/fhvhv/fhvhv_tripdata_2023-01/part-*.snappy.parquet
+...
+cleaned/fhvhv/fhvhv_tripdata_2025-12/part-*.snappy.parquet
 ```
 
 ---
@@ -129,7 +132,7 @@ docker exec -e PYSPARK_PYTHON=python3 -it nyc_taxi_cluster-spark-master-1 \
 
 Then run:
 ```python
-df = spark.read.parquet("hdfs://namenode:9000/user/data/nyc_taxi/cleaned/yellow_tripdata_*")
+df = spark.read.parquet("hdfs://namenode:9000/user/data/nyc_taxi/cleaned/yellow_taxi/yellow_tripdata_*")
 
 # Check schema
 df.printSchema()
@@ -143,7 +146,7 @@ df.count()
 
 ### Re-run the pipeline yourself (if you don't have the HDFS data)
 1. Start the Docker cluster: `docker compose up -d`
-2. Make sure the raw parquet files are in HDFS at `hdfs://namenode:9000/user/data/nyc_taxi/raw/`
+2. Make sure the raw Yellow Taxi parquet files are in HDFS at `hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/`
 3. Stop the Spark worker to free memory: `docker stop nyc_taxi_cluster-spark-worker-1`
 4. Run:
 ```bash
@@ -160,7 +163,7 @@ docker exec \
   --conf 'spark.sql.parquet.enableVectorizedReader=false' \
   --conf spark.memory.fraction=0.6 \
   --conf spark.memory.storageFraction=0.1 \
-  /workspace/jobs/run_pipeline.py
+  /workspace/jobs/run_yellow_taxi_clean_pipeline.py
 ```
 
 The pipeline supports **resume** — if it gets interrupted, re-running it will automatically skip months that are already done.
@@ -173,7 +176,7 @@ All the cleaning logic is in the `jobs/` folder:
 
 | File | What it does |
 |------|-------------|
-| `run_pipeline.py` | Main entry point — orchestrates everything |
+| `run_yellow_taxi_clean_pipeline.py` | Main entry point for Yellow Taxi cleaning |
 | `schema.py` | Defines the unified target schema |
 | `cleaning.py` | All the filtering and null-filling logic |
 | `feature_engineering.py` | Adds the derived columns |

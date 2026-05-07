@@ -2,16 +2,15 @@
 
 ## Overview
 
-This project builds a batch data pipeline for the NYC TLC Yellow Taxi trip dataset covering 2022 and 2023. We have about 78 million trip records across 24 monthly parquet files. The pipeline reads these files from HDFS, cleans and transforms the data using PySpark, and writes the cleaned output back to HDFS as parquet.
+This project builds a batch data pipeline for NYC TLC trip datasets. Yellow Taxi and High Volume FHV (HVFHV) both use the same 2023-2025 monthly range so the sources have matching file counts. The pipelines read monthly parquet files from HDFS, clean and transform the data using PySpark, and write cleaned output back to HDFS as parquet.
 
 Everything runs inside Docker containers so we don't need to install Hadoop or Spark on our machines directly.
 
 ## Dataset
 
-- **Source:** [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) — Yellow Taxi, 2022 and 2023
-- **Size:** ~5 GB+ of raw parquet files (24 monthly files)
-- **Total raw rows:** 77,966,324
-- **Cleaned rows:** 72,089,409 (about 7.5% removed)
+- **Source:** [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page) — Yellow Taxi and High Volume FHV trip records
+- **Size:** raw parquet files are too large to track in Git
+- **Tracked cleaning report:** generated from the latest local cleaning run
 
 ## Tech Stack
 
@@ -35,8 +34,10 @@ Data228GroupProject/
 │   ├── cleaning_report.md       # Summary table of row counts before and after
 │   └── DATA_CLEANING_HANDOFF.md # Detailed handoff doc explaining what was done
 ├── jobs/
-│   ├── run_pipeline.py          # Main entry point — orchestrates the full pipeline
-│   ├── schema.py                # Defines the unified target schema for all 24 files
+│   ├── ingest_tlc_tripdata.py   # Downloads TLC parquet files into HDFS
+│   ├── run_yellow_taxi_clean_pipeline.py # Cleans Yellow Taxi data
+│   ├── run_hvfhv_clean_pipeline.py       # Cleans High Volume FHV data
+│   ├── schema.py                # Defines the unified target schema
 │   ├── cleaning.py              # Null filling and row filtering logic
 │   ├── feature_engineering.py   # Adds derived columns (duration, speed, labels)
 │   ├── io_utils.py              # Reads/writes data to HDFS and generates the report
@@ -51,7 +52,7 @@ Data228GroupProject/
 
 ### 1. Schema Standardization
 
-The 2022 and 2023 parquet files have slightly different column types across months (for example, `VendorID` is INT in some files but BIGINT in others). The pipeline casts every file to a single unified schema defined in `schema.py` so there are no type mismatch errors when processing them.
+The parquet files can have slightly different column types across months (for example, `VendorID` is INT in some files but BIGINT in others). The pipeline casts every file to a single unified schema defined in `schema.py` so there are no type mismatch errors when processing them.
 
 ### 2. Missing Value Handling
 
@@ -72,7 +73,7 @@ We filter out rows that are clearly invalid or corrupt:
 - Passenger count is 0 or more than 6
 - Fare or total amount less than $0.01
 - Unrecognized vendor, rate code, or payment type codes
-- Pickup year is not 2022 or 2023
+- Pickup year is outside the configured valid range
 
 All these thresholds are configurable in `config/pipeline_config.yaml`.
 
@@ -84,6 +85,7 @@ After cleaning, we add these columns to make downstream analysis easier:
 |--------|-------------|
 | `trip_duration_mins` | Trip length in minutes |
 | `pickup_hour` | Hour of day the trip started (0–23) |
+| `pickup_year` | Year the trip started |
 | `pickup_day_of_week` | Day of the week (1=Sunday through 7=Saturday) |
 | `pickup_month` | Month number (1–12) |
 | `is_weekend` | True if Saturday or Sunday |
@@ -95,11 +97,13 @@ After cleaning, we add these columns to make downstream analysis easier:
 
 ### 5. Output
 
-- Cleaned parquet files are written to HDFS at `/user/data/nyc_taxi/cleaned/`, one folder per month
+- Cleaned parquet files are written to HDFS under `/user/data/nyc_taxi/cleaned/yellow_taxi/` and `/user/data/nyc_taxi/cleaned/fhvhv/`, one folder per month
 - Charts saved to `docs/charts/`
 - Cleaning report saved to `docs/cleaning_report.md`
 
 ## Cleaning Results
+
+These values are from the tracked report. Re-run the pipeline after ingesting the full configured range to refresh them.
 
 | Metric | Value |
 |--------|-------|
@@ -116,30 +120,55 @@ After cleaning, we add these columns to make downstream analysis easier:
 docker compose up -d
 ```
 
-### 2. Upload raw data to HDFS
+### 2. Ingest raw data to HDFS
 
-Download the Yellow Taxi parquet files from the TLC website and put them in a local `data/` folder, then upload to HDFS:
+Download the Yellow Taxi parquet files from the TLC website directly into HDFS:
 
 ```bash
-docker compose exec spark-master bash
-
-# inside the container
-hdfs dfs -mkdir -p /user/data/nyc_taxi/raw/
-hdfs dfs -put /workspace/data/*.parquet /user/data/nyc_taxi/raw/
+docker compose exec \
+  -e PYSPARK_PYTHON=python3 \
+  -e PYSPARK_DRIVER_PYTHON=python3 \
+  spark-master \
+  /opt/spark/bin/spark-submit /workspace/jobs/ingest_tlc_tripdata.py \
+  --start-year 2023 \
+  --end-year 2025 \
+  --workers 4
 ```
+
+This writes the raw Yellow Taxi parquet files to `/user/data/nyc_taxi/raw/yellow_taxi/`.
+
+To ingest matching High Volume FHV data, use the same year range with `--dataset fhvhv`:
+
+```bash
+docker compose exec \
+  -e PYSPARK_PYTHON=python3 \
+  -e PYSPARK_DRIVER_PYTHON=python3 \
+  spark-master \
+  /opt/spark/bin/spark-submit /workspace/jobs/ingest_tlc_tripdata.py \
+  --dataset fhvhv \
+  --start-year 2023 \
+  --end-year 2025 \
+  --workers 4
+```
+
+This writes HVFHV raw parquet files to `/user/data/nyc_taxi/raw/hvfhv/`. The TLC file prefix is `fhvhv_tripdata_YYYY-MM.parquet`.
 
 ### 3. Run the pipeline
 
 We stop the Spark worker first to free up memory (the pipeline runs in local mode on the master):
 
 ```bash
-docker stop nyc_taxi_cluster-spark-worker-1
+docker compose stop spark-worker
 
-docker exec \
+docker compose exec \
   -e PYSPARK_PYTHON=python3 \
   -e PYSPARK_DRIVER_PYTHON=python3 \
-  nyc_taxi_cluster-spark-master-1 \
-  /spark/bin/spark-class org.apache.spark.deploy.SparkSubmit \
+  -e SPARK_MASTER_URL='local[1]' \
+  -e SPARK_DRIVER_MEMORY=2200m \
+  -e SPARK_SHUFFLE_PARTITIONS=12 \
+  -e SPARK_DEFAULT_PARALLELISM=12 \
+  spark-master \
+  /opt/spark/bin/spark-submit \
   --master 'local[1]' \
   --driver-memory 2200m \
   --driver-java-options '-XX:MaxDirectMemorySize=256m -XX:MaxMetaspaceSize=256m' \
@@ -148,27 +177,131 @@ docker exec \
   --conf 'spark.sql.parquet.enableVectorizedReader=false' \
   --conf spark.memory.fraction=0.6 \
   --conf spark.memory.storageFraction=0.1 \
-  /workspace/jobs/run_pipeline.py
+  /workspace/jobs/run_yellow_taxi_clean_pipeline.py
 ```
 
-The pipeline supports **resume** — if it gets killed mid-way, just run the same command again and it will skip months that already have output in HDFS.
+The pipeline supports **resume** — if it gets killed mid-way, just run the same command again and it will skip months that already have standardized output in HDFS. Older cleaned folders that do not have the shared columns are reprocessed automatically.
 
-### 4. Check the results
+The Yellow Taxi cleaned output is written under `/user/data/nyc_taxi/cleaned/yellow_taxi/`, with one folder per monthly input file.
 
-Open the HDFS web UI at **http://localhost:9870** and browse to `/user/data/nyc_taxi/cleaned/` to see the output files.
+The cleaned outputs include these shared standardized columns used by the Iceberg builder:
+
+```text
+source_id
+source_name
+pickup_datetime
+dropoff_datetime
+pickup_hour_ts
+pickup_date
+pickup_year
+pickup_month
+pickup_hour
+pickup_day_of_week
+is_weekend
+PULocationID
+DOLocationID
+trip_duration_seconds
+trip_duration_mins
+trip_miles
+speed_mph
+```
+
+To clean the HVFHV data:
+
+```bash
+docker compose stop spark-worker
+
+docker compose exec \
+  -e PYSPARK_PYTHON=python3 \
+  -e PYSPARK_DRIVER_PYTHON=python3 \
+  -e SPARK_MASTER_URL='local[1]' \
+  -e SPARK_DRIVER_MEMORY=2200m \
+  -e SPARK_SHUFFLE_PARTITIONS=12 \
+  -e SPARK_DEFAULT_PARALLELISM=12 \
+  spark-master \
+  /opt/spark/bin/spark-submit \
+  --master 'local[1]' \
+  --driver-memory 2200m \
+  --driver-java-options '-XX:MaxDirectMemorySize=256m -XX:MaxMetaspaceSize=256m' \
+  --conf spark.sql.shuffle.partitions=12 \
+  --conf spark.default.parallelism=12 \
+  --conf 'spark.sql.parquet.enableVectorizedReader=false' \
+  --conf spark.memory.fraction=0.6 \
+  --conf spark.memory.storageFraction=0.1 \
+  /workspace/jobs/run_hvfhv_clean_pipeline.py
+```
+
+The HVFHV cleaned output is written under `/user/data/nyc_taxi/cleaned/fhvhv/`, with one folder per monthly input file, and its report is written to `docs/hvfhv_cleaning_report.md`. It uses the same standardized columns as Yellow Taxi, so downstream aggregation can treat both sources the same way.
+
+### 4. Build the combined ML and EDA Iceberg tables
+
+After both Yellow Taxi and HVFHV cleaning have run, build the shared ML and EDA aggregate tables:
+
+```bash
+docker compose exec \
+  -e PYSPARK_PYTHON=python3 \
+  -e PYSPARK_DRIVER_PYTHON=python3 \
+  spark-master \
+  /opt/spark/bin/spark-submit \
+  --master 'local[1]' \
+  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2 \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  /workspace/jobs/build_taxi_demand_ml_to_iceberg.py
+```
+
+This reads the standardized cleaned Yellow Taxi and HVFHV features, then writes one ML table and the EDA aggregate tables used by the analysis notebook. The ML dataset includes `source_id` and `pickup_year` so the same model can learn Yellow Taxi and HVFHV demand patterns together and test on 2025:
+
+- `0` = Yellow Taxi
+- `1` = HVFHV
+
+The main ML output is written to the Iceberg table `nyc.taxi_demand_ml`. The same job also writes these EDA tables in Iceberg:
+
+- `nyc.eda_cleaning_summary`
+- `nyc.eda_curated_feature_profile`
+- `nyc.eda_overall_hourly_demand`
+- `nyc.eda_borough_hourly_demand`
+- `nyc.eda_weekday_weekend_demand`
+- `nyc.eda_weekday_hourly_demand`
+- `nyc.eda_trip_metrics_by_hour`
+- `nyc.eda_top_pickup_zones`
+- `nyc.eda_top_dropoff_zones`
+
+The job still exports `/workspace/output/ml_dataset` for quick CSV-based ML experiments, but Iceberg is the source of truth for the project tables.
+
+Run the Spark MLlib RandomForest test from Iceberg:
+
+```bash
+docker compose exec \
+  -e PYSPARK_PYTHON=python3 \
+  -e PYSPARK_DRIVER_PYTHON=python3 \
+  spark-master \
+  /opt/spark/bin/spark-submit \
+  --master 'local[1]' \
+  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2 \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  /workspace/ml_local.py \
+  --input-format iceberg \
+  --iceberg-table nyc.taxi_demand_ml
+```
+
+By default, `ml_local.py` trains on 2023-2024 and tests on 2025.
+
+### 5. Check the results
+
+Open the HDFS web UI at **http://localhost:9871** and browse to `/user/data/nyc_taxi/cleaned/` to see the dataset folders.
 
 Or query with PySpark:
 
 ```bash
-docker exec -e PYSPARK_PYTHON=python3 -it nyc_taxi_cluster-spark-master-1 \
-  /spark/bin/pyspark --master local[1]
+docker compose exec -e PYSPARK_PYTHON=python3 -e PYSPARK_DRIVER_PYTHON=python3 spark-master \
+  /opt/spark/bin/pyspark --master 'local[1]'
 ```
 
 ```python
-df = spark.read.parquet("hdfs://namenode:9000/user/data/nyc_taxi/cleaned/yellow_tripdata_*")
+df = spark.read.parquet("hdfs://namenode:9000/user/data/nyc_taxi/cleaned/yellow_taxi/yellow_tripdata_*")
 df.printSchema()
 df.show(5)
-df.count()  # should be around 72 million
+df.count()
 ```
 
 ## Charts
