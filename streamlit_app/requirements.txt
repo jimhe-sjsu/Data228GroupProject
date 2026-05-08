@@ -1,0 +1,11 @@
+streamlit>=1.32
+streamlit-folium>=0.20
+folium>=0.16
+duckdb>=1.0
+pandas>=2.1
+pyarrow>=15.0
+plotly>=5.18
+
+# LLM providers — install whichever you use (or both)
+anthropic>=0.40
+ollama>=0.4

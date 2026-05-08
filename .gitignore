@@ -8,21 +8,34 @@ __pycache__/
 .venv/
 venv/
 env/
+*.env
+.env
+.env.*
+config/*.json
+streamlit_app/.venv/
+streamlit_app/.env
 
 # Jupyter
 .ipynb_checkpoints/
+notebooks/*_copy.ipynb
 
 # Local data and outputs
-data/
+data/*
+!data/taxi_zone_lookup.csv
+!data/taxi_zones.geojson
 output/*
 !output/taxi_demand_ml_parquet.zip
+outputs/
+notebooks/output/
 *.parquet
 *.duckdb
 *.csv
 _SUCCESS
 *.crc
-!data/
-!data/taxi_zone_lookup.csv
+
+# Local SDKs and installers
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
 
 # Spark and Hadoop temp artifacts
 spark-warehouse/
@@ -33,7 +46,13 @@ hs_err_pid*.log
 # Local temp files
 tmp/
 temp/
+.tmp/
 memory/
+
+# Airflow runtime artifacts
+logs/airflow/
+logs/scheduler/
+dags/__pycache__/
 
 # Pipeline outputs — charts and report are tracked
 !docs/charts/
