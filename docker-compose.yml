@@ -29,7 +29,7 @@ services:
     environment:
       SERVICE_PRECONDITION: "namenode:9870"
       CORE_CONF_fs_defaultFS: hdfs://namenode:9000
-      HDFS_CONF_dfs_datanode_hostname: localhost
+      HDFS_CONF_dfs_datanode_hostname: datanode
       HDFS_CONF_dfs_datanode_address: 0.0.0.0:9866
     env_file:
       - ./config/hadoop.env
@@ -47,6 +47,8 @@ services:
       - "8088:8088"
     environment:
       SERVICE_PRECONDITION: "namenode:9000 namenode:9870 datanode:9864"
+      YARN_CONF_yarn_resourcemanager_hostname: resourcemanager
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
     env_file:
       - ./config/hadoop.env
 
@@ -60,6 +62,8 @@ services:
       - "8042:8042"
     environment:
       SERVICE_PRECONDITION: "namenode:9000 namenode:9870 datanode:9864 resourcemanager:8088"
+      YARN_CONF_yarn_resourcemanager_hostname: resourcemanager
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
     env_file:
       - ./config/hadoop.env
 
@@ -132,7 +136,7 @@ services:
     env_file:
       - ./config/mysql.env
     ports:
-      - "3306:3306"
+      - "3340:3306"
     volumes:
       - ./data/mysql:/var/lib/mysql
     healthcheck:
@@ -140,6 +144,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+  
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: spark_jupyter
+    ports:
+      - "8890:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+    environment:
+      - JUPYTER_TOKEN=dev
 
   # ─────────────────────────────────────────────────────────────
   # AIRFLOW (Orchestration)
