@@ -2,8 +2,8 @@
 
 Steps 9-12 of the data flow: precomputed predictions → DuckDB serving table → Streamlit map + LLM Q&A.
 
-```
-Iceberg ML parquet (teammates' step 6 output)
+```text
+Notebook trained-model predictions
     └─ predictions.py ──► output/predictions.duckdb (current_taxi_demand_predictions)
                                   │
                                   ├─► app.py            (NYC choropleth map + top zones)
@@ -13,20 +13,16 @@ Iceberg ML parquet (teammates' step 6 output)
 ## One-time setup
 
 ```bash
-# 1. Extract the ML parquet your teammate produced
-mkdir -p .tmp/parquet_extract
-unzip -o output/taxi_demand_ml_parquet.zip -d .tmp/parquet_extract/
-
-# 2. Create venv + install runtime deps
+# 1. Create venv + install runtime deps
 python3 -m venv streamlit_app/.venv
 source streamlit_app/.venv/bin/activate
 pip install -r streamlit_app/requirements.txt
 
-# 3. Build the DuckDB serving table (~30 seconds, runs once)
+# 2. Build the DuckDB serving table from notebook predictions
 python streamlit_app/predictions.py
-# → Built ~700,000 prediction rows -> output/predictions.duckdb
+# → Built prediction rows -> output/predictions.duckdb
 
-# 4. Pick an LLM backend (one of the two below)
+# 3. Pick an LLM backend (one of the two below)
 
 # Option A — Anthropic Claude (uses native tool calling, most reliable)
 export LLM_PROVIDER=anthropic
@@ -60,24 +56,38 @@ Open http://localhost:8501.
 
 ## What it does
 
-- **Sidebar:** pick source (Yellow / HVFHV / Combined), month, day of week, hour
+- **Sidebar:** pick the available prediction profile, month, day of week, and hour
 - **Map:** every NYC pickup zone is colored by predicted demand band (low / medium / high / very_high)
 - **Top zones table:** top 10 highest-predicted zones for the chosen slice
 - **LLM panel:** ask natural-language questions; the agent issues read-only SQL against `current_taxi_demand_predictions` and answers from the result
 
-## Swapping in the trained ML model
+## Prediction Source
 
-The current `predictions.py` uses a **historical-average baseline** (per architecture plan).
-When the trained XGBoost/RandomForest model is delivered, replace `_compute_predictions` to
-call `model.predict(features_df)` instead of `AVG(trip_count)`. Schema and downstream
-code stay identical.
+`predictions.py` first looks for the trained-model CSV exported by the notebook:
+
+```text
+notebooks/output/streamlit_predictions_csv/*.csv
+```
+
+If that file exists, it writes those trained predictions to DuckDB with
+`model_version = 'trained-notebook-v1'`. The current notebook export is
+combined-only, so the app does not split trained predictions into Yellow Taxi
+and HVFHV views. If the notebook CSV is missing, the script falls back to the
+historical-average baseline from the ML parquet export. For that fallback,
+extract the portable parquet first:
+
+```bash
+mkdir -p .tmp/parquet_extract
+unzip -o output/taxi_demand_ml_parquet.zip -d .tmp/parquet_extract/
+python streamlit_app/predictions.py
+```
 
 ## File layout
 
 | File | Role |
 |------|------|
 | `config.py` | Paths, constants, LLM model id |
-| `predictions.py` | Builds the DuckDB serving table from the Iceberg ML parquet |
+| `predictions.py` | Builds the DuckDB serving table from notebook predictions, with ML parquet baseline fallback |
 | `data_loader.py` | Cached DuckDB connection + GeoJSON loader for Streamlit |
 | `app.py` | Streamlit UI: sidebar + folium map + top-zones table + LLM chat |
 | `llm_agent.py` | Pluggable LLM backends (Anthropic with tool-calling / Ollama with prompt-based SQL extraction) |

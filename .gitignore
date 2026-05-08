@@ -11,6 +11,7 @@ env/
 *.env
 .env
 .env.*
+config/*.json
 streamlit_app/.venv/
 streamlit_app/.env
 
