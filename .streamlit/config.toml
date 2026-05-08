@@ -1,0 +1,20 @@
+# Tesla-inspired minimal white theme for the NYC Taxi Demand app.
+# Clean, premium, light interface with sharp typography and red accent.
+
+[theme]
+base = "light"
+primaryColor = "#e31937"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f5f5"
+textColor = "#171a20"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[ui]
+hideTopBar = true

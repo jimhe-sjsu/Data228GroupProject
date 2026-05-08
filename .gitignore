@@ -8,12 +8,15 @@ __pycache__/
 .venv/
 venv/
 env/
+streamlit_app/.venv/
 
 # Jupyter
 .ipynb_checkpoints/
 
 # Local data and outputs
-data/
+data/*
+!data/taxi_zone_lookup.csv
+!data/taxi_zones.geojson
 output/*
 !output/taxi_demand_ml_parquet.zip
 *.parquet
@@ -21,8 +24,6 @@ output/*
 *.csv
 _SUCCESS
 *.crc
-!data/
-!data/taxi_zone_lookup.csv
 
 # Spark and Hadoop temp artifacts
 spark-warehouse/
@@ -33,7 +34,13 @@ hs_err_pid*.log
 # Local temp files
 tmp/
 temp/
+.tmp/
 memory/
+
+# Airflow runtime artifacts
+logs/airflow/
+logs/scheduler/
+dags/__pycache__/
 
 # Pipeline outputs — charts and report are tracked
 !docs/charts/
