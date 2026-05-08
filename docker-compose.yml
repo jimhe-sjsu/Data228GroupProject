@@ -185,16 +185,7 @@ services:
     env_file:
       - ./config/airflow.env
     entrypoint: >
-      bash -c "
-        airflow db migrate &&
-        airflow users create
-          --username admin
-          --password admin
-          --firstname Admin
-          --lastname User
-          --role Admin
-          --email admin@data228.local || true
-      "
+      bash -c "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@data228.local || true"
     restart: "no"
 
   airflow-webserver:
