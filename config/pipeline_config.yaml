@@ -11,13 +11,16 @@ spark:
   default_parallelism: 12
 
 hdfs:
+  # Legacy paths (kept for backward compat with run_pipeline.py)
   input_paths:
-    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_2023-*.parquet"
-    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_2024-*.parquet"
-    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_2025-*.parquet"
+    - "hdfs://namenode:9000/user/data/nyc_taxi/raw/yellow_taxi/yellow_tripdata_*.parquet"
   output_path: "hdfs://namenode:9000/user/data/nyc_taxi/cleaned/yellow_taxi"
   partition_cols:
     - "pickup_month"
+  # Medallion architecture paths
+  bronze_path: "hdfs://namenode:9000/data/bronze/nyc_taxi"
+  silver_path: "hdfs://namenode:9000/data/silver/nyc_taxi"
+  gold_path: "hdfs://namenode:9000/data/gold/nyc_taxi"
 
 hvfhv:
   input_paths:
@@ -38,10 +41,10 @@ hvfhv:
 mysql:
   host: "mysql"
   port: 3306
-  database: "nyc_taxi"
+  database: "data228"
   table: "nyc_taxi_cleaned"
-  user: "root"
-  password: "rootpassword"
+  user: "data228user"
+  password: "data228pass"
   driver: "com.mysql.cj.jdbc.Driver"
   jdbc_jar_path: "/workspace/jars/mysql-connector-j-8.0.33.jar"
 
@@ -51,6 +54,11 @@ thresholds:
   min_fare_amount: 0.01
   max_trip_duration_hours: 3
   valid_years:
+    - 2018
+    - 2019
+    - 2020
+    - 2021
+    - 2022
     - 2023
     - 2024
     - 2025
