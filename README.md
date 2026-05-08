@@ -249,12 +249,12 @@ docker compose exec \
   /workspace/jobs/build_taxi_demand_ml_to_iceberg.py
 ```
 
-This reads the standardized cleaned Yellow Taxi and HVFHV features, then writes one ML table and the EDA aggregate tables used by the analysis notebook. The ML dataset includes `source_id` and `pickup_year` so the same model can learn Yellow Taxi and HVFHV demand patterns together and test on 2025:
+This reads the standardized cleaned Yellow Taxi and HVFHV features, then writes one ML table and the EDA aggregate tables. The ML dataset includes `source_id` and `pickup_year` so the same model can learn Yellow Taxi and HVFHV demand patterns together and test on 2025:
 
 - `0` = Yellow Taxi
 - `1` = HVFHV
 
-The main ML output is written to the Iceberg table `nyc.taxi_demand_ml`. The same job also writes these EDA tables in Iceberg:
+The main ML output is written to the Iceberg table `nyc.taxi_demand_ml`. The same job also writes these EDA tables in Iceberg, with demand-style EDA tables derived from the ML aggregate to avoid repeated full trip-level scans:
 
 - `nyc.eda_cleaning_summary`
 - `nyc.eda_curated_feature_profile`

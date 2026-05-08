@@ -213,6 +213,41 @@ def build_cleaning_summary(spark, df, config):
     return spark.createDataFrame(rows, ["source_id", "source_name", "metric", "value"])
 
 
+def build_cleaning_summary_from_ml(spark, ml_df, config):
+    raw_counts = {
+        "yellow": raw_count_for_paths(spark, config["hdfs"]["input_paths"]),
+        "hvfhv": raw_count_for_paths(spark, config["hvfhv"]["input_paths"]),
+    }
+    cleaned_counts = {
+        row["source_name"]: row["trip_count"]
+        for row in (
+            ml_df.groupBy("source_name")
+            .agg(F.sum("trip_count").cast("long").alias("trip_count"))
+            .collect()
+        )
+    }
+
+    rows = []
+    for source_id, source_name in [(0, "yellow"), (1, "hvfhv")]:
+        raw_count = raw_counts.get(source_name)
+        cleaned_count = cleaned_counts.get(source_name, 0)
+        metrics = [("curated_row_count", float(cleaned_count))]
+        if raw_count is not None:
+            removed_count = raw_count - cleaned_count
+            removed_pct = (removed_count / raw_count * 100.0) if raw_count else 0.0
+            metrics.extend(
+                [
+                    ("raw_row_count", float(raw_count)),
+                    ("removed_row_count", float(removed_count)),
+                    ("removed_pct", float(removed_pct)),
+                ]
+            )
+        for metric, value in metrics:
+            rows.append((source_id, source_name, metric, value))
+
+    return spark.createDataFrame(rows, ["source_id", "source_name", "metric", "value"])
+
+
 def build_curated_feature_profile(df):
     data_types = {field.name: field.dataType.simpleString() for field in df.schema.fields}
     agg_exprs = [F.count("*").alias("row_count")]
@@ -268,6 +303,43 @@ def build_ml_table(df):
     )
 
 
+def pickup_hour_ts_expr():
+    return F.to_timestamp(
+        F.concat(
+            F.col("pickup_date").cast("string"),
+            F.lit(" "),
+            F.format_string("%02d:00:00", F.col("pickup_hour")),
+        )
+    )
+
+
+def build_overall_hourly_demand_from_ml(ml_df):
+    return (
+        ml_df.groupBy(
+            "source_id",
+            "source_name",
+            "pickup_date",
+            "pickup_year",
+            "pickup_month",
+            "pickup_day_of_week",
+            "pickup_hour",
+        )
+        .agg(F.sum("trip_count").cast("long").alias("trip_count"))
+        .withColumn("pickup_hour_ts", pickup_hour_ts_expr())
+        .select(
+            "source_id",
+            "source_name",
+            "pickup_hour_ts",
+            "pickup_date",
+            "pickup_year",
+            "pickup_month",
+            "pickup_day_of_week",
+            "pickup_hour",
+            "trip_count",
+        )
+    )
+
+
 def build_overall_hourly_demand(df):
     return (
         df.groupBy(
@@ -281,6 +353,36 @@ def build_overall_hourly_demand(df):
             "pickup_hour",
         )
         .agg(F.count("*").alias("trip_count"))
+    )
+
+
+def build_borough_hourly_demand_from_ml(ml_df, zones):
+    pickup_joined = ml_df.join(zones, ml_df.PULocationID == zones.location_id, "left")
+    return (
+        pickup_joined.groupBy(
+            "source_id",
+            "source_name",
+            "pickup_date",
+            "pickup_year",
+            "pickup_month",
+            "pickup_day_of_week",
+            "pickup_hour",
+            "borough",
+        )
+        .agg(F.sum("trip_count").cast("long").alias("trip_count"))
+        .withColumn("pickup_hour_ts", pickup_hour_ts_expr())
+        .select(
+            "source_id",
+            "source_name",
+            "pickup_hour_ts",
+            "pickup_date",
+            "pickup_year",
+            "pickup_month",
+            "pickup_day_of_week",
+            "pickup_hour",
+            "borough",
+            "trip_count",
+        )
     )
 
 
@@ -302,10 +404,30 @@ def build_borough_hourly_demand(df, zones):
     )
 
 
+def build_weekday_weekend_demand_from_ml(ml_df):
+    return (
+        ml_df.groupBy("source_id", "source_name", "pickup_hour", "is_weekend")
+        .agg(F.sum("trip_count").cast("long").alias("trip_count"))
+    )
+
+
 def build_weekday_weekend_demand(df):
     return (
         df.groupBy("source_id", "source_name", "pickup_hour", "is_weekend")
         .agg(F.count("*").alias("trip_count"))
+    )
+
+
+def build_weekday_hourly_demand_from_ml(ml_df):
+    return (
+        ml_df.groupBy(
+            "source_id",
+            "source_name",
+            "pickup_day_of_week",
+            "pickup_hour",
+            "is_weekend",
+        )
+        .agg(F.sum("trip_count").cast("long").alias("trip_count"))
     )
 
 
@@ -335,15 +457,38 @@ def build_trip_metrics_by_hour(df):
 
 
 def build_top_zones(df, zones, location_col):
-    location_expr = F.col(location_col).cast("long")
-    joined = df.join(zones, location_expr == zones.location_id, "left")
     counts = (
-        joined.groupBy("source_id", "source_name", "location_id", "borough", "zone", "service_zone")
+        df.select(
+            "source_id",
+            "source_name",
+            F.col(location_col).cast("long").alias("location_id"),
+        )
+        .groupBy("source_id", "source_name", "location_id")
         .agg(F.count("*").alias("trip_count"))
     )
+    joined = counts.join(zones, "location_id", "left")
     rank_window = Window.partitionBy("source_id").orderBy(F.desc("trip_count"), F.asc("location_id"))
     return (
-        counts.withColumn("source_rank", F.row_number().over(rank_window))
+        joined.withColumn("source_rank", F.row_number().over(rank_window))
+        .filter(F.col("source_rank") <= 20)
+    )
+
+
+def build_top_pickup_zones_from_ml(ml_df, zones):
+    counts = (
+        ml_df.select(
+            "source_id",
+            "source_name",
+            F.col("PULocationID").cast("long").alias("location_id"),
+            "trip_count",
+        )
+        .groupBy("source_id", "source_name", "location_id")
+        .agg(F.sum("trip_count").cast("long").alias("trip_count"))
+    )
+    joined = counts.join(zones, "location_id", "left")
+    rank_window = Window.partitionBy("source_id").orderBy(F.desc("trip_count"), F.asc("location_id"))
+    return (
+        joined.withColumn("source_rank", F.row_number().over(rank_window))
         .filter(F.col("source_rank") <= 20)
     )
 
@@ -373,29 +518,27 @@ def main():
     try:
         logger.info("Reading standardized cleaned Yellow Taxi and HVFHV data")
         df = read_standardized_cleaned_data(spark)
-        logger.info("Skipping cleaned dataframe disk cache for ML-only build")
         zones = read_zone_lookup(spark)
 
         ml_df = build_ml_table(df).persist(StorageLevel.MEMORY_AND_DISK)
         write_iceberg_table(ml_df, ML_ICEBERG_TABLE)
         write_ml_csv_export(ml_df)
-        ml_df.unpersist()
-        ml_df = None
 
-        # eda_outputs = {
-        #     "cleaning_summary": build_cleaning_summary(spark, df, config),
-        #     "curated_feature_profile": build_curated_feature_profile(df),
-        #     "overall_hourly_demand": build_overall_hourly_demand(df),
-        #     "borough_hourly_demand": build_borough_hourly_demand(df, zones),
-        #     "weekday_weekend_demand": build_weekday_weekend_demand(df),
-        #     "weekday_hourly_demand": build_weekday_hourly_demand(df),
-        #     "trip_metrics_by_hour": build_trip_metrics_by_hour(df),
-        #     "top_pickup_zones": build_top_zones(df, zones, "PULocationID"),
-        #     "top_dropoff_zones": build_top_zones(df, zones, "DOLocationID"),
-        # }
+        logger.info("Building optimized EDA Iceberg outputs")
+        eda_outputs = {
+            "cleaning_summary": build_cleaning_summary_from_ml(spark, ml_df, config),
+            "curated_feature_profile": build_curated_feature_profile(df),
+            "overall_hourly_demand": build_overall_hourly_demand_from_ml(ml_df),
+            "borough_hourly_demand": build_borough_hourly_demand_from_ml(ml_df, zones),
+            "weekday_weekend_demand": build_weekday_weekend_demand_from_ml(ml_df),
+            "weekday_hourly_demand": build_weekday_hourly_demand_from_ml(ml_df),
+            "trip_metrics_by_hour": build_trip_metrics_by_hour(df),
+            "top_pickup_zones": build_top_pickup_zones_from_ml(ml_df, zones),
+            "top_dropoff_zones": build_top_zones(df, zones, "DOLocationID"),
+        }
 
-        # for name, table in EDA_TABLES.items():
-        #     write_iceberg_table(eda_outputs[name], table)
+        for name, table in EDA_TABLES.items():
+            write_iceberg_table(eda_outputs[name], table)
 
         print("\n===== ICEBERG BUILD COMPLETE =====")
         print("ML table: {}".format(ML_ICEBERG_TABLE))
