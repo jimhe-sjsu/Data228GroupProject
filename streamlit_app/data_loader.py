@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from config import DUCKDB_PATH, ZONE_GEOJSON
-from predictions import SERVING_TABLE
+from predictions import RELIABILITY_TABLE, SERVING_TABLE
 
 
 # ── Connection (cached resource, single shared handle) ───────────────────────
@@ -209,6 +209,65 @@ def fetch_zone_metadata(location_id: int) -> dict | None:
 
 
 # ── Label helpers (cheap, lru_cache is plenty) ──────────────────────────────
+@st.cache_data(show_spinner=False, ttl=300)
+def fetch_reliability(
+    source_name: str | None,
+    month: int,
+    day_of_week: int,
+    hour: int,
+) -> pd.DataFrame:
+    """Pull the 4-factor reliability rows for the user-selected slice.
+
+    `source_name == None` (Combined) averages the per-source sub-scores
+    weighted by yellow vs hvfhv volume so the result still has all 4 factors
+    aligned to the same zone × time bucket.
+    """
+    con = get_duckdb_connection()
+    if source_name is None:
+        query = f"""
+            WITH sliced AS (
+                SELECT * FROM {RELIABILITY_TABLE}
+                WHERE pickup_month = ?
+                  AND pickup_day_of_week = ?
+                  AND pickup_hour = ?
+            )
+            SELECT
+                PULocationID,
+                ANY_VALUE(borough)               AS borough,
+                ANY_VALUE(zone)                  AS zone,
+                pickup_month, pickup_day_of_week, pickup_hour,
+                SUM(mean_demand)                 AS mean_demand,
+                AVG(demand_cv)                   AS demand_cv,
+                SUM(trend_slope)                 AS trend_slope,
+                MAX(yellow_share)                AS yellow_share,
+                AVG(demand_score)                AS demand_score,
+                AVG(reliability_score)           AS reliability_score,
+                AVG(trend_score)                 AS trend_score,
+                MAX(yellow_share_score)          AS yellow_share_score,
+                SUM(yellow_total)                AS yellow_total,
+                SUM(hvfhv_total)                 AS hvfhv_total
+            FROM sliced
+            GROUP BY PULocationID, pickup_month, pickup_day_of_week, pickup_hour
+        """
+        params = [month, day_of_week, hour]
+    else:
+        query = f"""
+            SELECT
+                PULocationID, borough, zone,
+                pickup_month, pickup_day_of_week, pickup_hour,
+                mean_demand, demand_cv, trend_slope, yellow_share,
+                demand_score, reliability_score, trend_score, yellow_share_score,
+                yellow_total, hvfhv_total
+            FROM {RELIABILITY_TABLE}
+            WHERE source_name = ?
+              AND pickup_month = ?
+              AND pickup_day_of_week = ?
+              AND pickup_hour = ?
+        """
+        params = [source_name, month, day_of_week, hour]
+    return con.execute(query, params).fetchdf()
+
+
 @lru_cache(maxsize=1)
 def day_of_week_labels() -> dict[int, str]:
     """Map Spark's `dayofweek` output (1=Sun, 7=Sat) to readable names."""

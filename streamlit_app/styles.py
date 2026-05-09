@@ -273,6 +273,19 @@ h1, h2, h3, h4 {{ font-weight: 600; letter-spacing: -0.02em; color: {TEXT}; }}
     border: 1px solid {BORDER};
     border-radius: 8px !important;
     padding: 16px 20px !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}}
+[data-testid="stChatMessage"] p {{
+    font-size: 14px;
+    line-height: 1.6;
+    color: {TEXT};
+}}
+/* User messages get a slightly different look */
+[data-testid="stChatMessage"][data-testid*="user"] {{
+    background: {BG} !important;
 }}
 
 /* ── Map container ───────────────────────────────────────────────────── */
@@ -322,6 +335,26 @@ button[kind="primary"]:hover {{
 .stExpander {{
     border: 1px solid {BORDER};
     border-radius: 8px;
+}}
+
+/* ── AI suggestion chips ─────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-panel"] button[kind="secondary"] {{
+    font-size: 11px !important;
+    letter-spacing: 0.04em;
+    color: {TEXT_MUTED} !important;
+    border: 1px solid {BORDER} !important;
+    border-radius: 20px !important;
+    padding: 8px 16px !important;
+    background: {BG} !important;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+.stTabs [data-baseweb="tab-panel"] button[kind="secondary"]:hover {{
+    border-color: {ACCENT} !important;
+    color: {ACCENT} !important;
+    background: rgba(227, 25, 55, 0.04) !important;
 }}
 
 /* ── Misc ────────────────────────────────────────────────────────────── */

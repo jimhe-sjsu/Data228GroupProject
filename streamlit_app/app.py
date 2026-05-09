@@ -24,6 +24,7 @@ from streamlit_folium import st_folium
 from data_loader import (
     day_of_week_labels,
     fetch_predictions,
+    fetch_reliability,
     fetch_zone_24h_profile,
     fetch_zone_metadata,
     format_freshness,
@@ -32,6 +33,7 @@ from data_loader import (
     load_zone_geojson,
     month_labels,
 )
+from scoring import DEFAULT_WEIGHTS, Weights, annotate_recommendations
 from styles import ACCENT, BORDER, CSS, DEMAND_COLORS, SURFACE, TEXT, TEXT_MUTED
 
 # ── Page setup ───────────────────────────────────────────────────────────────
@@ -70,12 +72,7 @@ def render_sidebar() -> dict:
         unsafe_allow_html=True,
     )
 
-    source_choice = st.sidebar.radio(
-        "Data Source",
-        options=("Combined", "yellow", "hvfhv"),
-        index=0,
-        help="Yellow = traditional taxi, HVFHV = ride-share (Uber/Lyft)",
-    )
+    source_choice = "Combined"
     month_lbls = month_labels()
     month = st.sidebar.selectbox(
         "Month",
@@ -705,124 +702,384 @@ def render_llm_panel() -> None:
         '<div class="tp-section" style="margin-bottom:16px;">AI Assistant</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f"""
-        <div style="color:{TEXT_MUTED}; font-size:13px; margin-bottom:16px;
-                    padding: 12px 16px; background: {SURFACE}; border-radius: 8px;
-                    border: 1px solid {BORDER};">
-            Ask natural-language questions about NYC taxi demand predictions.
-            Powered by DuckDB + LLM.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
+    # Show welcome card only when the conversation is empty
+    if not st.session_state.chat_history:
+        st.markdown(
+            f"""
+            <div style="text-align:center; padding: 40px 20px 24px 20px; margin-bottom: 16px;">
+                <div style="font-size: 40px; margin-bottom: 12px;">🚕</div>
+                <div style="font-size: 18px; font-weight: 500; color: {TEXT};
+                            margin-bottom: 6px;">What would you like to know?</div>
+                <div style="font-size: 13px; color: {TEXT_MUTED}; max-width: 420px;
+                            margin: 0 auto;">
+                    Ask about NYC taxi demand — zones, boroughs, peak hours,
+                    trends, or driver recommendations.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Suggestion chips
+        suggestions = [
+            "Top 5 busiest zones in Manhattan at 6pm",
+            "Where should I drive on a Friday night?",
+            "Compare yellow taxi vs Uber in Brooklyn",
+            "Which zones are growing fastest?",
+        ]
+        chip_cols = st.columns(len(suggestions))
+        for col, suggestion in zip(chip_cols, suggestions):
+            with col:
+                if st.button(
+                    suggestion,
+                    key=f"suggest_{suggestion[:20]}",
+                    use_container_width=True,
+                ):
+                    st.session_state.chat_history.append(
+                        {"role": "user", "content": suggestion}
+                    )
+                    st.rerun()
+
+    # Render conversation history
     for entry in st.session_state.chat_history:
-        with st.chat_message(entry["role"]):
+        avatar = "👤" if entry["role"] == "user" else "🚕"
+        with st.chat_message(entry["role"], avatar=avatar):
             st.markdown(entry["content"])
 
-    user_q = st.chat_input("Ask about taxi demand... e.g. 'Top 5 zones in Manhattan at 6pm'")
-    if not user_q:
-        return
+    # If the last message is from the user and has no assistant reply yet,
+    # generate the response now (handles suggestion chip clicks)
+    needs_response = (
+        st.session_state.chat_history
+        and st.session_state.chat_history[-1]["role"] == "user"
+        and (
+            len(st.session_state.chat_history) < 2
+            or st.session_state.chat_history[-2]["role"] != "assistant"
+            or st.session_state.chat_history[-1] != st.session_state.chat_history[-2]
+        )
+    )
 
-    st.session_state.chat_history.append({"role": "user", "content": user_q})
-    with st.chat_message("user"):
-        st.markdown(user_q)
+    # Check if we truly need a response (no assistant reply follows the last user msg)
+    if needs_response:
+        last_user_idx = len(st.session_state.chat_history) - 1
+        has_reply = (
+            last_user_idx + 1 < len(st.session_state.chat_history)
+            and st.session_state.chat_history[last_user_idx + 1]["role"] == "assistant"
+        )
+        if not has_reply:
+            _generate_response(st.session_state.chat_history[-1]["content"])
 
-    with st.chat_message("assistant"):
-        with st.spinner("Analyzing..."):
+    # Chat input
+    user_q = st.chat_input(
+        "Ask about taxi demand...",
+        key="ai_chat_input",
+    )
+    if user_q:
+        st.session_state.chat_history.append({"role": "user", "content": user_q})
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(user_q)
+        _generate_response(user_q)
+
+
+def _generate_response(user_q: str) -> None:
+    """Generate and display an AI assistant response — no logs, just the answer."""
+    with st.chat_message("assistant", avatar="🚕"):
+        with st.spinner("Thinking..."):
             try:
                 from llm_agent import ask
 
-                # Pass prior turns so follow-ups like "now Brooklyn" make sense.
-                # Exclude the just-appended user message — the agent re-adds it.
                 prior_history = st.session_state.chat_history[:-1]
-                answer, trace = ask(user_q, history=prior_history)
+                answer, _ = ask(user_q, history=prior_history)
             except RuntimeError as exc:
-                answer, trace = f"⚠ {exc}", []
-            except Exception as exc:
-                answer, trace = f"⚠ Agent error: {exc}", []
+                err_msg = str(exc).lower()
+                if "api_key" in err_msg or "not set" in err_msg:
+                    answer = (
+                        "The AI assistant isn't configured yet. "
+                        "Please set your **ANTHROPIC_API_KEY** environment variable "
+                        "or switch to a local Ollama model."
+                    )
+                elif "not installed" in err_msg:
+                    answer = (
+                        "A required library is missing. "
+                        "Please run `pip install -r streamlit_app/requirements.txt`."
+                    )
+                else:
+                    answer = (
+                        "Something went wrong processing your request. "
+                        "Please try rephrasing your question."
+                    )
+            except Exception:
+                answer = (
+                    "Sorry, I couldn't process that request. "
+                    "Please try a different question."
+                )
         st.markdown(answer)
-        sql_steps = [t for t in trace if t["role"] == "tool"]
-        if sql_steps:
-            with st.expander("🔍 Query trace"):
-                for step in sql_steps:
-                    st.code(step["content"]["sql"], language="sql")
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
 
-# ── Data Explorer ────────────────────────────────────────────────────────────
-def render_data_explorer(predictions: pd.DataFrame) -> None:
+
+
+# ── Recommender (4-factor reliability) ──────────────────────────────────────
+RECOMMENDER_BAND_COLORS = {
+    "top_pick": ACCENT,
+    "good":     "#e8734a",
+    "okay":     "#f5c06b",
+    "avoid":    "#e8e8e8",
+}
+
+
+def render_recommender_weights() -> Weights:
+    """Driver-preference sliders. Returns the chosen weights (auto-normalized)."""
     st.markdown(
-        '<div class="tp-section">Data Explorer</div>',
+        '<div class="tp-section">Driver Preferences</div>',
         unsafe_allow_html=True,
     )
+    st.markdown(
+        f'<div style="color:{TEXT_MUTED};font-size:12px;margin-bottom:12px;">'
+        "Adjust how much each factor matters to you. Weights are normalized."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(4, gap="medium")
+    with cols[0]:
+        demand = st.slider("Demand", 0.0, 1.0, DEFAULT_WEIGHTS.demand, 0.05,
+                           help="How busy the zone is on average.")
+    with cols[1]:
+        reliability = st.slider("Reliability", 0.0, 1.0, DEFAULT_WEIGHTS.reliability, 0.05,
+                                help="Demand consistency (low coefficient of variation).")
+    with cols[2]:
+        trend = st.slider("Growth", 0.0, 1.0, DEFAULT_WEIGHTS.trend, 0.05,
+                          help="Multi-year demand trend (2023→2025 slope).")
+    with cols[3]:
+        ys = st.slider("Yellow Edge", 0.0, 1.0, DEFAULT_WEIGHTS.yellow_share, 0.05,
+                       help="Strength of yellow taxi position vs HVFHV.")
+    return Weights(demand=demand, reliability=reliability,
+                   trend=trend, yellow_share=ys)
 
-    if predictions.empty:
-        st.info("No data for the selected filters.")
+
+def render_recommender_map(scored: pd.DataFrame) -> dict | None:
+    """Choropleth colored by recommendation_band (not raw demand)."""
+    geojson = load_zone_geojson()
+    if scored.empty:
+        st.info("No reliability data for this slice.")
+        return None
+
+    band_by_zone = scored.set_index("PULocationID")["recommendation_band"].to_dict()
+    score_by_zone = scored.set_index("PULocationID")["opportunity_score"].to_dict()
+
+    m = folium.Map(
+        location=[40.7549, -73.9840],
+        zoom_start=11,
+        tiles="cartodbpositron",
+        zoom_control=True,
+        attribution_control=False,
+    )
+
+    def style_fn(feature):
+        loc = feature["properties"].get("LocationID")
+        band = band_by_zone.get(loc)
+        if band is None:
+            return {"fillColor": "#f0f0f0", "color": BORDER, "weight": 0.5,
+                    "fillOpacity": 0.3}
+        return {
+            "fillColor": RECOMMENDER_BAND_COLORS[band],
+            "color": "#ffffff", "weight": 0.8, "fillOpacity": 0.82,
+        }
+
+    def highlight_fn(feature):
+        return {"weight": 2.5, "color": ACCENT, "fillOpacity": 0.92}
+
+    # Inject opportunity_score into properties for the tooltip
+    for feature in geojson.get("features", []):
+        loc_id = feature["properties"].get("LocationID")
+        feature["properties"]["opportunity_score"] = round(
+            float(score_by_zone.get(loc_id, 0)), 3
+        )
+        feature["properties"]["band"] = band_by_zone.get(loc_id, "—")
+
+    folium.GeoJson(
+        geojson,
+        style_function=style_fn,
+        highlight_function=highlight_fn,
+        tooltip=folium.GeoJsonTooltip(
+            fields=["zone", "borough", "opportunity_score", "band"],
+            aliases=["Zone", "Borough", "Score", "Recommendation"],
+            sticky=True,
+            style=(
+                "background-color: #ffffff; color: #171a20; "
+                "border: 1px solid #e0e0e0; padding: 10px 14px; "
+                "font-family: Inter, sans-serif; font-size: 12px; "
+                "border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);"
+            ),
+        ),
+    ).add_to(m)
+
+    return st_folium(
+        m, width=None, height=560,
+        returned_objects=["last_active_drawing"],
+        key="reco_map",
+    )
+
+
+def render_zone_radar(map_state: dict | None, scored: pd.DataFrame) -> None:
+    """Radar chart showing the 4 sub-scores for the clicked zone."""
+    if not map_state or not map_state.get("last_active_drawing"):
+        st.markdown(
+            f'<div style="color:{TEXT_MUTED};font-size:12px;padding:12px 0;">'
+            "Click any zone on the map for its 4-factor breakdown."
+            "</div>",
+            unsafe_allow_html=True,
+        )
         return
 
-    # Show/hide toggle
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        search_term = st.text_input(
-            "🔍 Search zones",
-            placeholder="Type a zone or borough name...",
-            label_visibility="collapsed",
-        )
-    with col2:
-        sort_order = st.selectbox(
-            "Sort",
-            options=["Highest Demand", "Lowest Demand", "Zone Name"],
-            label_visibility="collapsed",
-        )
+    props = (map_state["last_active_drawing"] or {}).get("properties", {}) or {}
+    loc_id = props.get("LocationID")
+    if loc_id is None:
+        return
 
-    filtered = predictions.copy()
-    if search_term:
-        mask = (
-            filtered["zone"].str.contains(search_term, case=False, na=False)
-            | filtered["borough"].str.contains(search_term, case=False, na=False)
-        )
-        filtered = filtered[mask]
+    row = scored[scored["PULocationID"] == int(loc_id)]
+    if row.empty:
+        st.info("No reliability data for that zone.")
+        return
+    r = row.iloc[0]
 
-    if sort_order == "Lowest Demand":
-        filtered = filtered.sort_values("predicted_trip_count", ascending=True)
-    elif sort_order == "Zone Name":
-        filtered = filtered.sort_values("zone", ascending=True)
-    # Default is already sorted by highest demand
-
-    display_cols = [
-        c
-        for c in ["zone", "borough", "PULocationID", "predicted_trip_count"]
-        if c in filtered.columns
+    categories = ["Demand", "Reliability", "Growth", "Yellow Edge"]
+    values = [
+        float(r.get("demand_score", 0)),
+        float(r.get("reliability_score", 0)),
+        float(r.get("trend_score", 0)),
+        float(r.get("yellow_share_score", 0)),
     ]
-    if "demand_level" in filtered.columns:
-        display_cols.append("demand_level")
+    values_closed = values + values[:1]
+    cats_closed = categories + categories[:1]
 
-    display_df = filtered[display_cols].copy()
-    display_df.columns = [
-        c.replace("_", " ").title() for c in display_df.columns
-    ]
-    if "Predicted Trip Count" in display_df.columns:
-        display_df["Predicted Trip Count"] = display_df[
-            "Predicted Trip Count"
-        ].round(0).astype(int)
-
-    st.dataframe(
-        display_df,
-        width="stretch",
-        height=400,
-        hide_index=True,
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=values_closed, theta=cats_closed, fill="toself",
+        line=dict(color=ACCENT, width=2),
+        fillcolor=f"rgba(227, 25, 55, 0.18)",
+        hovertemplate="%{theta}: %{r:.2f}<extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif", size=11, color=TEXT),
+        polar=dict(
+            bgcolor="rgba(0,0,0,0)",
+            radialaxis=dict(visible=True, range=[0, 1], gridcolor="#e0e0e0",
+                            tickfont=dict(size=9, color=TEXT_MUTED)),
+            angularaxis=dict(gridcolor="#e0e0e0",
+                             tickfont=dict(size=11, color=TEXT)),
+        ),
+        showlegend=False,
+        margin=dict(l=40, r=40, t=20, b=20),
+        height=320,
     )
 
     st.markdown(
-        f'<div style="font-size:12px; color:{TEXT_MUTED}; margin-top:8px;">'
-        f"Showing {len(filtered)} of {len(predictions)} zones</div>",
+        f"""
+        <div style="display:flex;align-items:baseline;justify-content:space-between;
+                    margin: 8px 0 4px 0;">
+            <div>
+                <div style="font-size:18px;font-weight:500;color:{TEXT};">{r['zone']}</div>
+                <div style="font-size:11px;color:{TEXT_MUTED};letter-spacing:0.06em;
+                            text-transform:uppercase;margin-top:2px;">
+                    {r['borough']} · ZONE {loc_id} · {r['recommendation_band'].upper().replace('_', ' ')}
+                </div>
+            </div>
+            <div style="font-size:28px;font-weight:300;color:{TEXT};letter-spacing:-0.02em;">
+                {r['opportunity_score']:.2f}
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Raw values panel
+    raw = pd.DataFrame({
+        "Factor": ["Mean demand", "Volatility (CV)", "Trend slope", "Yellow share"],
+        "Value": [
+            f"{r['mean_demand']:.0f} trips/hr",
+            f"{r['demand_cv']:.2%}",
+            f"{r['trend_slope']:+.1f} trips/year",
+            f"{r['yellow_share']:.0%}" if pd.notna(r['yellow_share']) else "—",
+        ],
+    })
+    st.dataframe(raw, use_container_width=True, hide_index=True)
+
+
+def render_recommender_top(scored: pd.DataFrame, n: int = 10) -> None:
+    """Top N recommended zones for the current weights."""
+    st.markdown(
+        '<div class="tp-section">Top Recommendations</div>',
+        unsafe_allow_html=True,
+    )
+    if scored.empty:
+        st.markdown(
+            f'<div style="color:{TEXT_MUTED};font-size:13px;">No data.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    top = scored.sort_values("opportunity_score", ascending=False).head(n)
+    rows_html = []
+    for rank, (_, row) in enumerate(top.iterrows(), 1):
+        band = row["recommendation_band"]
+        band_color = RECOMMENDER_BAND_COLORS.get(band, "#888")
+        rows_html.append(f"""
+            <div class="tp-zone-row">
+                <div style="display: flex; align-items: center;">
+                    <span class="tp-zone-rank tp-zone-rank-normal">{rank}</span>
+                    <div>
+                        <div class="tp-zone-name">{row['zone']}</div>
+                        <div class="tp-zone-borough">{row['borough']} ·
+                            <span style="color:{band_color};font-weight:500;">
+                                {band.replace('_', ' ').upper()}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="tp-zone-value">{row['opportunity_score']:.2f}</div>
+            </div>
+        """)
+    st.markdown("".join(rows_html), unsafe_allow_html=True)
+
+
+def render_recommender(selectors: dict) -> None:
+    """The whole Reliable Income Recommender tab."""
+    weights = render_recommender_weights()
+
+    raw = fetch_reliability(**selectors)
+    if raw.empty:
+        st.info("No reliability data for this filter combination yet. "
+                "Try a more common time slice (e.g. weekday 18:00).")
+        return
+
+    scored = annotate_recommendations(raw, weights)
+
+    st.write("")
+    map_col, side_col = st.columns([2.6, 1], gap="large")
+    with map_col:
+        st.markdown(
+            '<div class="tp-section">Opportunity Map</div>',
+            unsafe_allow_html=True,
+        )
+        map_state = render_recommender_map(scored)
+        # Recommendation band legend
+        legend_items = "".join(
+            f'<span><span class="tp-legend-swatch" '
+            f'style="background:{RECOMMENDER_BAND_COLORS[b]}"></span>'
+            f'{b.replace("_", " ")}</span>'
+            for b in ("top_pick", "good", "okay", "avoid")
+        )
+        st.markdown(f'<div class="tp-legend">{legend_items}</div>',
+                    unsafe_allow_html=True)
+        render_zone_radar(map_state, scored)
+    with side_col:
+        render_recommender_top(scored)
 
 
 # ── Footer ───────────────────────────────────────────────────────────────────
@@ -862,8 +1119,9 @@ def main() -> None:
     st.write("")  # vertical breath
 
     # Tab navigation — Tesla style
-    tab_map, tab_analytics, tab_explorer, tab_ai = st.tabs(
-        ["🗺️  Map View", "📊  Analytics", "🔎  Data Explorer", "🤖  AI Assistant"]
+    tab_map, tab_reco, tab_analytics, tab_ai = st.tabs(
+        ["🗺️  Map View", "🎯  Recommender", "📊  Analytics",
+         "🤖  AI Assistant"]
     )
 
     with tab_map:
@@ -880,11 +1138,11 @@ def main() -> None:
         with side_col:
             render_top_zones(predictions)
 
+    with tab_reco:
+        render_recommender(selectors)
+
     with tab_analytics:
         render_analytics(predictions, selectors)
-
-    with tab_explorer:
-        render_data_explorer(predictions)
 
     with tab_ai:
         render_llm_panel()

@@ -23,14 +23,14 @@ import os
 # Provider selection. "anthropic" uses the Claude SDK + native tool calling.
 # "ollama" uses a local Ollama server with a Gemma-friendly prompt pattern
 # (Gemma has no native tool-call support, so we drive it via SQL extraction).
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").lower()
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
 
 # Anthropic settings
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
 # Ollama settings
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma2:9b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:1b")
 
 # Shared
 DEFAULT_LLM_MODEL = ANTHROPIC_MODEL  # backwards-compatible alias

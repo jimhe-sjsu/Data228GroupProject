@@ -30,14 +30,15 @@ from predictions import SERVING_TABLE
 
 
 # ── Schema doc shared by both backends ───────────────────────────────────────
-SCHEMA_DOC = f"""You are an analytics assistant for a NYC taxi demand
-prediction app. You answer questions by querying ONE DuckDB table called
-`{SERVING_TABLE}` with this schema:
+SCHEMA_DOC = f"""You are an analytics assistant for a NYC taxi *driver
+opportunity recommender*. You answer questions by querying TWO DuckDB tables.
 
-  prediction_timestamp  TIMESTAMP    -- when the table was last built (NOT a query field)
-  model_version         VARCHAR      -- traceability, NOT a query field
+TABLE 1 — `{SERVING_TABLE}` — simple demand predictions (legacy view):
+
+  prediction_timestamp  TIMESTAMP    -- when the table was built (NOT a query field)
+  model_version         VARCHAR      -- traceability (NOT a query field)
   source_id             INTEGER      -- 0=yellow, 1=hvfhv
-  source_name           VARCHAR      -- 'yellow' or 'hvfhv'  ← USE THIS for source filters
+  source_name           VARCHAR      -- 'yellow' or 'hvfhv'
   PULocationID          BIGINT       -- NYC taxi zone id (1-265)
   borough               VARCHAR      -- 'Manhattan' | 'Queens' | 'Brooklyn' | 'Bronx' | 'Staten Island' | 'EWR' | 'Unknown'
   zone                  VARCHAR      -- human-readable zone name (e.g. 'Midtown Center')
@@ -47,6 +48,27 @@ prediction app. You answer questions by querying ONE DuckDB table called
   is_weekend            BOOLEAN      -- TRUE only when pickup_day_of_week IN (1, 7)
   predicted_trip_count  DOUBLE       -- the demand forecast
   demand_level          VARCHAR      -- 'low' | 'medium' | 'high' | 'very_high'
+
+TABLE 2 — `current_zone_reliability` — risk-aware 4-factor recommender.
+Use this when the user asks about RELIABILITY, RISK, GROWTH, VOLATILITY,
+TREND, or YELLOW vs HVFHV market share:
+
+  source_id, source_name, PULocationID, borough, zone,
+  pickup_month, pickup_day_of_week, pickup_hour, is_weekend,
+
+  -- Raw factor values (use these for explanations)
+  mean_demand            DOUBLE   -- avg trip_count for this zone × time bucket
+  demand_cv              DOUBLE   -- coefficient of variation (lower = more reliable)
+  trend_slope            DOUBLE   -- multi-year demand slope (trips/year, signed)
+  yellow_share           DOUBLE   -- yellow / (yellow + hvfhv) in [0, 1]
+  yellow_total           BIGINT   -- yellow trip counts across observations
+  hvfhv_total            BIGINT   -- hvfhv trip counts across observations
+
+  -- Normalized [0,1] sub-scores per bucket (use these for ranking)
+  demand_score           DOUBLE   -- higher = busier
+  reliability_score      DOUBLE   -- higher = more consistent (CV inverted)
+  trend_score            DOUBLE   -- higher = growing zone
+  yellow_share_score     DOUBLE   -- higher = stronger yellow position
 
 CRITICAL hints to avoid silent wrong answers:
 - DO NOT filter by prediction_timestamp — it is metadata, not query input.
@@ -79,25 +101,49 @@ ORDER BY predicted_trip_count DESC
 LIMIT 3
 ```
 
-Q: Compare yellow vs HVFHV demand in Queens at 2am on Saturday.
+Q: Where should I drive for the most RELIABLE income on a weekday at 6pm?
 ```sql
-SELECT source_name, SUM(predicted_trip_count) AS total_trips
-FROM current_taxi_demand_predictions
-WHERE borough = 'Queens'
-  AND pickup_day_of_week = 7
-  AND pickup_hour = 2
-GROUP BY source_name
-ORDER BY total_trips DESC
+SELECT zone, borough, mean_demand, demand_cv, reliability_score
+FROM current_zone_reliability
+WHERE source_name = 'yellow'
+  AND pickup_day_of_week IN (2,3,4,5,6)
+  AND pickup_hour = 18
+  AND mean_demand > 30
+ORDER BY reliability_score DESC
+LIMIT 5
+```
+
+Q: Which zones are GROWING fastest year-over-year for yellow taxis?
+```sql
+SELECT zone, borough, trend_slope, mean_demand, trend_score
+FROM current_zone_reliability
+WHERE source_name = 'yellow'
+  AND pickup_day_of_week = 6
+  AND pickup_hour = 18
+ORDER BY trend_slope DESC
 LIMIT 10
 ```
 
-Q: Which borough has the most very_high zones overall?
+Q: Where does yellow taxi still dominate over Uber/Lyft (HVFHV)?
 ```sql
-SELECT borough, COUNT(*) AS very_high_zones
-FROM current_taxi_demand_predictions
-WHERE demand_level = 'very_high'
-GROUP BY borough
-ORDER BY very_high_zones DESC
+SELECT zone, borough, yellow_total, hvfhv_total, yellow_share
+FROM current_zone_reliability
+WHERE source_name = 'yellow'
+  AND pickup_hour = 18
+  AND mean_demand > 50
+ORDER BY yellow_share DESC
+LIMIT 10
+```
+
+Q: Show me high-demand but VOLATILE zones (avoid these — risky bets).
+```sql
+SELECT zone, borough, mean_demand, demand_cv
+FROM current_zone_reliability
+WHERE source_name = 'yellow'
+  AND pickup_day_of_week = 6
+  AND pickup_hour = 18
+  AND mean_demand > 100
+ORDER BY demand_cv DESC
 LIMIT 10
 ```
 
