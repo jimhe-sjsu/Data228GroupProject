@@ -57,3 +57,7 @@ dags/__pycache__/
 # Pipeline outputs — charts and report are tracked
 !docs/charts/
 !docs/cleaning_report.md
+
+# Presentation and report files
+NYC\ Taxi\ Demand\ Prediction_\ End-to-End\ Big\ Data\ Pipeline.pptx
+nyc_taxi_ieee_report.docx
