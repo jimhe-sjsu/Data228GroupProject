@@ -1,4 +1,4 @@
-"""Cached loaders for static reference data and the DuckDB serving table."""
+"""Cached data loaders for the DuckDB serving table and reference data."""
 from __future__ import annotations
 
 import json
@@ -11,17 +11,12 @@ import pandas as pd
 import streamlit as st
 
 from config import DUCKDB_PATH, ZONE_GEOJSON
-from predictions import RELIABILITY_TABLE, SERVING_TABLE
+from predictions import SERVING_TABLE
 
 
-# ── Connection (cached resource, single shared handle) ───────────────────────
 @st.cache_resource(show_spinner=False)
 def get_duckdb_connection(db_path: str = str(DUCKDB_PATH)) -> duckdb.DuckDBPyConnection:
-    """Open a read-only DuckDB connection. Cached across Streamlit reruns.
-
-    Raises FileNotFoundError if the serving file is missing — callers
-    (the Streamlit app) catch this and render a friendly setup screen.
-    """
+    """Open a read-only DuckDB connection, cached across Streamlit reruns."""
     if not Path(db_path).exists():
         raise FileNotFoundError(
             f"DuckDB serving file not found at {db_path}. "
@@ -30,10 +25,9 @@ def get_duckdb_connection(db_path: str = str(DUCKDB_PATH)) -> duckdb.DuckDBPyCon
     return duckdb.connect(db_path, read_only=True)
 
 
-# ── Static reference data (cached forever per process) ──────────────────────
 @st.cache_data(show_spinner=False)
 def load_zone_geojson() -> dict:
-    """Load the NYC taxi zone polygons (WGS84)."""
+    """Load the NYC taxi zone polygons."""
     with ZONE_GEOJSON.open("r") as f:
         return json.load(f)
 
@@ -59,7 +53,7 @@ def list_filter_options() -> dict[str, list]:
 
 @st.cache_data(show_spinner=False)
 def get_data_freshness() -> dict | None:
-    """Return prediction_timestamp + model_version for the freshness banner."""
+    """Return prediction_timestamp + model_version for the header banner."""
     con = get_duckdb_connection()
     cols = [r[0] for r in con.execute(f"DESCRIBE {SERVING_TABLE}").fetchall()]
     has_model_version = "model_version" in cols
@@ -81,7 +75,6 @@ def get_data_freshness() -> dict | None:
     }
 
 
-# ── Filtered queries — short TTL cache so repeat filter clicks are instant ──
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_predictions(
     source_name: str | None,
@@ -89,17 +82,10 @@ def fetch_predictions(
     day_of_week: int,
     hour: int,
 ) -> pd.DataFrame:
-    """Pull predicted demand for the user-selected slice.
-
-    `source_name == None` means "combine yellow + hvfhv" — sums predicted_trip_count
-    for the same zone × time bucket. Cached for 5 minutes per filter combo.
-    """
+    """Pull predicted demand for the selected filter slice."""
     con = get_duckdb_connection()
     if source_name is None:
-        # Combined view: sum yellow + hvfhv per zone, then re-bucket demand_level
-        # against this slice's quantiles so the legend on the map matches what
-        # the user sees. Without this CTE the dataframe would be missing the
-        # demand_level column and downstream charts would silently fall back.
+        # Combined view: sum yellow + hvfhv per zone, recompute demand_level
         query = f"""
             WITH agg AS (
                 SELECT
@@ -160,12 +146,7 @@ def fetch_zone_24h_profile(
     month: int,
     day_of_week: int,
 ) -> pd.DataFrame:
-    """Return the 24-hour demand curve for one zone — used by map drill-down.
-
-    The Streamlit app calls this when a zone is clicked on the map. Bypasses
-    the hour filter so the user can see how that zone behaves across the day
-    for the selected month + day_of_week.
-    """
+    """Return the 24-hour demand curve for one zone (used by map drill-down)."""
     con = get_duckdb_connection()
     if source_name is None:
         query = f"""
@@ -208,69 +189,8 @@ def fetch_zone_metadata(location_id: int) -> dict | None:
     return {"zone": row[0], "borough": row[1]}
 
 
-# ── Label helpers (cheap, lru_cache is plenty) ──────────────────────────────
-@st.cache_data(show_spinner=False, ttl=300)
-def fetch_reliability(
-    source_name: str | None,
-    month: int,
-    day_of_week: int,
-    hour: int,
-) -> pd.DataFrame:
-    """Pull the 4-factor reliability rows for the user-selected slice.
-
-    `source_name == None` (Combined) averages the per-source sub-scores
-    weighted by yellow vs hvfhv volume so the result still has all 4 factors
-    aligned to the same zone × time bucket.
-    """
-    con = get_duckdb_connection()
-    if source_name is None:
-        query = f"""
-            WITH sliced AS (
-                SELECT * FROM {RELIABILITY_TABLE}
-                WHERE pickup_month = ?
-                  AND pickup_day_of_week = ?
-                  AND pickup_hour = ?
-            )
-            SELECT
-                PULocationID,
-                ANY_VALUE(borough)               AS borough,
-                ANY_VALUE(zone)                  AS zone,
-                pickup_month, pickup_day_of_week, pickup_hour,
-                SUM(mean_demand)                 AS mean_demand,
-                AVG(demand_cv)                   AS demand_cv,
-                SUM(trend_slope)                 AS trend_slope,
-                MAX(yellow_share)                AS yellow_share,
-                AVG(demand_score)                AS demand_score,
-                AVG(reliability_score)           AS reliability_score,
-                AVG(trend_score)                 AS trend_score,
-                MAX(yellow_share_score)          AS yellow_share_score,
-                SUM(yellow_total)                AS yellow_total,
-                SUM(hvfhv_total)                 AS hvfhv_total
-            FROM sliced
-            GROUP BY PULocationID, pickup_month, pickup_day_of_week, pickup_hour
-        """
-        params = [month, day_of_week, hour]
-    else:
-        query = f"""
-            SELECT
-                PULocationID, borough, zone,
-                pickup_month, pickup_day_of_week, pickup_hour,
-                mean_demand, demand_cv, trend_slope, yellow_share,
-                demand_score, reliability_score, trend_score, yellow_share_score,
-                yellow_total, hvfhv_total
-            FROM {RELIABILITY_TABLE}
-            WHERE source_name = ?
-              AND pickup_month = ?
-              AND pickup_day_of_week = ?
-              AND pickup_hour = ?
-        """
-        params = [source_name, month, day_of_week, hour]
-    return con.execute(query, params).fetchdf()
-
-
 @lru_cache(maxsize=1)
 def day_of_week_labels() -> dict[int, str]:
-    """Map Spark's `dayofweek` output (1=Sun, 7=Sat) to readable names."""
     return {1: "Sunday", 2: "Monday", 3: "Tuesday", 4: "Wednesday",
             5: "Thursday", 6: "Friday", 7: "Saturday"}
 
@@ -281,7 +201,7 @@ def month_labels() -> dict[int, str]:
 
 
 def format_freshness(freshness: dict | None) -> str:
-    """Human-readable freshness for the header banner."""
+    """Human-readable freshness string for the header banner."""
     if not freshness or freshness.get("prediction_timestamp") is None:
         return "Data: not initialized"
     ts = freshness["prediction_timestamp"]
@@ -290,7 +210,6 @@ def format_freshness(freshness: dict | None) -> str:
             ts = datetime.fromisoformat(ts)
         except ValueError:
             return f"Data as of {ts}"
-    # `ts` is naive (DuckDB TIMESTAMP without tz); compare against a naive UTC now.
     delta = datetime.now(timezone.utc).replace(tzinfo=None) - ts
     seconds = int(delta.total_seconds())
     if seconds < 60:

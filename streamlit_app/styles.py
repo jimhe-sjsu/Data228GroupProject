@@ -1,22 +1,13 @@
-"""Custom CSS injected into the Streamlit page.
+"""Custom CSS for the Streamlit dashboard."""
 
-Design language: Tesla-inspired clean white surface with a single red accent
-(#e31937). Inter from Google Fonts, generous whitespace, sharp corners, no
-drop shadows.  The goal is to look like a premium Tesla-style dashboard
-— crisp, confident, minimal.
-"""
+BG = "#ffffff"
+SURFACE = "#f5f5f5"
+SURFACE_2 = "#ebebeb"
+BORDER = "#e0e0e0"
+TEXT = "#171a20"
+TEXT_MUTED = "#5c5e62"
+ACCENT = "#e31937"
 
-# ── Color palette (mirror of .streamlit/config.toml) ─────────────────────────
-BG = "#ffffff"          # page background
-SURFACE = "#f5f5f5"     # cards, panels
-SURFACE_2 = "#ebebeb"   # nested elements
-BORDER = "#e0e0e0"      # subtle dividers
-TEXT = "#171a20"        # primary text (Tesla charcoal)
-TEXT_MUTED = "#5c5e62"  # secondary text
-ACCENT = "#e31937"      # Tesla red — used sparingly
-
-# Demand color ramp on light background.
-# Goes from soft grey through warm oranges to the accent red.
 DEMAND_COLORS = {
     "low": "#e8e8e8",
     "medium": "#f5c06b",
@@ -31,10 +22,40 @@ CSS = f"""
 
 /* ── Reset Streamlit chrome ─────────────────────────────────────────── */
 #MainMenu, footer {{ visibility: hidden; }}
-header {{ background: transparent !important; }}
+header {{ visibility: hidden; height: 0; min-height: 0; padding: 0; }}
 .stDeployButton {{ display: none !important; }}
 [data-testid="stToolbar"] {{ display: none !important; }}
 [data-testid="stDecoration"] {{ display: none !important; }}
+
+/* Hide sidebar collapse button — prevent accidental collapse */
+[data-testid="stSidebar"] button[data-testid="stBaseButton-headerNoPadding"] {{
+    display: none !important;
+}}
+
+/* If sidebar does get collapsed, make the reopen control prominent */
+[data-testid="collapsedControl"] {{
+    visibility: visible !important;
+    display: block !important;
+    position: fixed !important;
+    top: 8px !important;
+    left: 0 !important;
+    z-index: 999999 !important;
+    background: {SURFACE} !important;
+    border: 1px solid {BORDER} !important;
+    border-left: none !important;
+    border-radius: 0 8px 8px 0 !important;
+    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.1) !important;
+    padding: 12px 10px !important;
+}}
+[data-testid="collapsedControl"]:hover {{
+    border-color: {ACCENT} !important;
+    box-shadow: 2px 2px 16px rgba(227, 25, 55, 0.2) !important;
+}}
+[data-testid="collapsedControl"] svg {{
+    width: 22px !important;
+    height: 22px !important;
+    color: {ACCENT} !important;
+}}
 
 /* ── Base typography ─────────────────────────────────────────────────── */
 html, body, [class*="st-"], .stApp, .stMarkdown {{

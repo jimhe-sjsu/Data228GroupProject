@@ -30,10 +30,9 @@ from predictions import SERVING_TABLE
 
 
 # ── Schema doc shared by both backends ───────────────────────────────────────
-SCHEMA_DOC = f"""You are an analytics assistant for a NYC taxi *driver
-opportunity recommender*. You answer questions by querying TWO DuckDB tables.
-
-TABLE 1 — `{SERVING_TABLE}` — simple demand predictions (legacy view):
+SCHEMA_DOC = f"""You are an analytics assistant for a NYC taxi demand
+prediction app. You answer questions by querying ONE DuckDB table called
+`{SERVING_TABLE}` with this schema:
 
   prediction_timestamp  TIMESTAMP    -- when the table was built (NOT a query field)
   model_version         VARCHAR      -- traceability (NOT a query field)
@@ -49,27 +48,6 @@ TABLE 1 — `{SERVING_TABLE}` — simple demand predictions (legacy view):
   predicted_trip_count  DOUBLE       -- the demand forecast
   demand_level          VARCHAR      -- 'low' | 'medium' | 'high' | 'very_high'
 
-TABLE 2 — `current_zone_reliability` — risk-aware 4-factor recommender.
-Use this when the user asks about RELIABILITY, RISK, GROWTH, VOLATILITY,
-TREND, or YELLOW vs HVFHV market share:
-
-  source_id, source_name, PULocationID, borough, zone,
-  pickup_month, pickup_day_of_week, pickup_hour, is_weekend,
-
-  -- Raw factor values (use these for explanations)
-  mean_demand            DOUBLE   -- avg trip_count for this zone × time bucket
-  demand_cv              DOUBLE   -- coefficient of variation (lower = more reliable)
-  trend_slope            DOUBLE   -- multi-year demand slope (trips/year, signed)
-  yellow_share           DOUBLE   -- yellow / (yellow + hvfhv) in [0, 1]
-  yellow_total           BIGINT   -- yellow trip counts across observations
-  hvfhv_total            BIGINT   -- hvfhv trip counts across observations
-
-  -- Normalized [0,1] sub-scores per bucket (use these for ranking)
-  demand_score           DOUBLE   -- higher = busier
-  reliability_score      DOUBLE   -- higher = more consistent (CV inverted)
-  trend_score            DOUBLE   -- higher = growing zone
-  yellow_share_score     DOUBLE   -- higher = stronger yellow position
-
 CRITICAL hints to avoid silent wrong answers:
 - DO NOT filter by prediction_timestamp — it is metadata, not query input.
 - "Friday" → pickup_day_of_week = 6   (NOT is_weekend; Friday is a weekday)
@@ -77,17 +55,6 @@ CRITICAL hints to avoid silent wrong answers:
 - "6 pm" → pickup_hour = 18           (24-hour clock)
 - "Manhattan", "Brooklyn" etc. → borough = 'Manhattan'  (always quoted, exact case)
 - Boolean AND must be `AND`, not `&&`. SQL is standard SQL, not C/JS.
-s- "Top N zones", "busiest zones", and "best zones" must return DISTINCT zones.
-  Never return the same zone multiple times just because it appears in several
-  months, days, or sources.
-- If the user question includes dashboard filter context, use those month/day/hour
-  filters unless the user explicitly asks for a broader period.
-- If ranking over multiple months or days, rank by AVG(predicted_trip_count) and
-  label it as average predicted trips per matching time bucket. Do NOT use SUM
-  across months/days unless the user asks for cumulative/total demand.
-- SUM(predicted_trip_count) is only appropriate for combining source rows inside
-  one exact time slice (same zone + month + day + hour), or when the user asks
-  for a total.
 - Always end with LIMIT (10 unless asked otherwise).
 
 Rules:
@@ -103,96 +70,34 @@ FEW_SHOT_EXAMPLES = """Examples:
 
 Q: Top 3 busiest zones in Manhattan on Friday at 6pm.
 ```sql
-SELECT zone, AVG(predicted_trip_count) AS avg_predicted_trips
+SELECT zone, predicted_trip_count
 FROM current_taxi_demand_predictions
 WHERE borough = 'Manhattan'
   AND pickup_day_of_week = 6
   AND pickup_hour = 18
-GROUP BY zone
-ORDER BY avg_predicted_trips DESC
+ORDER BY predicted_trip_count DESC
 LIMIT 3
 ```
 
-Q: Dashboard filters are Month=June, Day=Monday, Hour=18, Source=Combined.
-User asks: Top 5 busiest zones in Manhattan.
+Q: Compare yellow vs HVFHV demand in Queens at 2am on Saturday.
 ```sql
-SELECT zone, SUM(predicted_trip_count) AS predicted_trips
+SELECT source_name, SUM(predicted_trip_count) AS total_trips
 FROM current_taxi_demand_predictions
-WHERE borough = 'Manhattan'
-  AND pickup_month = 6
-  AND pickup_day_of_week = 2
-  AND pickup_hour = 18
-GROUP BY zone
-ORDER BY predicted_trips DESC
-LIMIT 5
-```
-
-Q: Where should I drive for the most RELIABLE income on a weekday at 6pm?
-```sql
-SELECT
-  zone,
-  borough,
-  AVG(mean_demand) AS avg_demand,
-  AVG(demand_cv) AS avg_demand_cv,
-  AVG(reliability_score) AS avg_reliability_score
-FROM current_zone_reliability
-WHERE source_name = 'yellow'
-  AND pickup_day_of_week IN (2,3,4,5,6)
-  AND pickup_hour = 18
-  AND mean_demand > 30
-GROUP BY zone, borough
-ORDER BY avg_reliability_score DESC
-LIMIT 5
-```
-
-Q: Which zones are GROWING fastest year-over-year for yellow taxis?
-```sql
-SELECT
-  zone,
-  borough,
-  AVG(trend_slope) AS avg_trend_slope,
-  AVG(mean_demand) AS avg_demand,
-  AVG(trend_score) AS avg_trend_score
-FROM current_zone_reliability
-WHERE source_name = 'yellow'
-  AND pickup_day_of_week = 6
-  AND pickup_hour = 18
-GROUP BY zone, borough
-ORDER BY avg_trend_slope DESC
+WHERE borough = 'Queens'
+  AND pickup_day_of_week = 7
+  AND pickup_hour = 2
+GROUP BY source_name
+ORDER BY total_trips DESC
 LIMIT 10
 ```
 
-Q: Where does yellow taxi still dominate over Uber/Lyft (HVFHV)?
+Q: Which borough has the most very_high zones overall?
 ```sql
-SELECT
-  zone,
-  borough,
-  SUM(yellow_total) AS yellow_trips,
-  SUM(hvfhv_total) AS hvfhv_trips,
-  SUM(yellow_total) * 1.0 / NULLIF(SUM(yellow_total) + SUM(hvfhv_total), 0) AS yellow_share
-FROM current_zone_reliability
-WHERE source_name = 'yellow'
-  AND pickup_hour = 18
-  AND mean_demand > 50
-GROUP BY zone, borough
-ORDER BY yellow_share DESC
-LIMIT 10
-```
-
-Q: Show me high-demand but VOLATILE zones (avoid these — risky bets).
-```sql
-SELECT
-  zone,
-  borough,
-  AVG(mean_demand) AS avg_demand,
-  AVG(demand_cv) AS avg_demand_cv
-FROM current_zone_reliability
-WHERE source_name = 'yellow'
-  AND pickup_day_of_week = 6
-  AND pickup_hour = 18
-  AND mean_demand > 100
-GROUP BY zone, borough
-ORDER BY avg_demand_cv DESC
+SELECT borough, COUNT(*) AS very_high_zones
+FROM current_taxi_demand_predictions
+WHERE demand_level = 'very_high'
+GROUP BY borough
+ORDER BY very_high_zones DESC
 LIMIT 10
 ```
 
