@@ -30,7 +30,8 @@ CSS = f"""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700&display=swap');
 
 /* ── Reset Streamlit chrome ─────────────────────────────────────────── */
-#MainMenu, footer, header {{ visibility: hidden; }}
+#MainMenu, footer {{ visibility: hidden; }}
+header {{ background: transparent !important; }}
 .stDeployButton {{ display: none !important; }}
 [data-testid="stToolbar"] {{ display: none !important; }}
 [data-testid="stDecoration"] {{ display: none !important; }}
@@ -248,6 +249,8 @@ h1, h2, h3, h4 {{ font-weight: 600; letter-spacing: -0.02em; color: {TEXT}; }}
     background: {SURFACE} !important;
     border-right: 1px solid {BORDER};
 }}
+
+
 [data-testid="stSidebar"] .stRadio > label,
 [data-testid="stSidebar"] .stSelectbox > label,
 [data-testid="stSidebar"] .stSlider > label {{

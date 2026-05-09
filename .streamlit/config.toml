@@ -16,5 +16,3 @@ runOnSave = false
 [browser]
 gatherUsageStats = false
 
-[ui]
-hideTopBar = true

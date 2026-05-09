@@ -1,7 +1,7 @@
-"""NYC Taxi Demand — Tesla-inspired interactive Streamlit dashboard.
+"""NYC Taxi Demand
 
 Layout (top to bottom):
-    [HERO HEADER]  Tesla-style centered branding with context
+    [HERO HEADER]  
     [METRIC STRIP] 4 animated KPI cards with hover effects
     [TAB NAV]      Map View | Analytics | AI Assistant
     [MAP + ZONES]  Interactive choropleth + ranked top zones
@@ -9,7 +9,7 @@ Layout (top to bottom):
     [CHAT]         LLM agent conversation
     [FOOTER]       Clean minimal footer
 
-Sidebar: source / month / day_of_week / hour filters with Tesla styling.
+Sidebar: source / month / day_of_week / hour filters.
 All styling lives in `styles.py`.
 """
 from __future__ import annotations
@@ -72,7 +72,6 @@ def render_sidebar() -> dict:
         unsafe_allow_html=True,
     )
 
-    source_choice = "Combined"
     month_lbls = month_labels()
     month = st.sidebar.selectbox(
         "Month",
@@ -87,21 +86,25 @@ def render_sidebar() -> dict:
         format_func=lambda d: dow_lbls.get(d, str(d)),
         index=options["day_of_week"].index(2) if 2 in options["day_of_week"] else 0,
     )
+
+    # Clamp the slider's initial value into the actual data range — otherwise
+    # `value=18` would throw if the trained predictions only covered earlier
+    # hours.
+    hour_min = min(options["hour"])
+    hour_max = max(options["hour"])
+    default_hour = min(max(18, hour_min), hour_max)
     hour = st.sidebar.slider(
         "Hour of Day",
-        min_value=min(options["hour"]),
-        max_value=max(options["hour"]),
-        value=18,
+        min_value=hour_min,
+        max_value=hour_max,
+        value=default_hour,
         step=1,
         help="Slide to see demand predictions for different hours",
     )
 
-    # Time display in sidebar
-    hour_display = f"{hour:02d}:00"
+    # 12-hour clock display.  `hour % 12 or 12` maps 0→12, 12→12, others as-is.
     period = "AM" if hour < 12 else "PM"
-    display_hour = hour if hour <= 12 else hour - 12
-    if display_hour == 0:
-        display_hour = 12
+    display_hour = hour % 12 or 12
     st.sidebar.markdown(
         f"""
         <div style="text-align: center; margin: 16px 0 8px 0; padding: 16px;
@@ -120,8 +123,10 @@ def render_sidebar() -> dict:
         unsafe_allow_html=True,
     )
 
+    # source_name=None means "combined view" — the notebook export is
+    # combined-only, so we never split into yellow / hvfhv here.
     return {
-        "source_name": None if source_choice == "Combined" else source_choice,
+        "source_name": None,
         "month": int(month),
         "day_of_week": int(day_of_week),
         "hour": int(hour),
