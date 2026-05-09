@@ -1,4 +1,5 @@
 """Paths and constants shared across the streamlit_app modules."""
+import os
 from pathlib import Path
 
 # ── Filesystem layout ────────────────────────────────────────────────────────
@@ -8,8 +9,13 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 
 ZONE_LOOKUP_CSV = DATA_DIR / "taxi_zone_lookup.csv"
 ZONE_GEOJSON = DATA_DIR / "taxi_zones.geojson"
-ML_PARQUET_DIR = PROJECT_ROOT / ".tmp" / "parquet_extract" / "taxi_demand_ml_parquet"
-DUCKDB_PATH = OUTPUT_DIR / "predictions.duckdb"
+ML_PARQUET_DIR = Path(
+    os.environ.get(
+        "ML_PARQUET_DIR",
+        str(PROJECT_ROOT / ".tmp" / "parquet_extract" / "taxi_demand_ml_parquet"),
+    )
+)
+DUCKDB_PATH = Path(os.environ.get("DUCKDB_PATH", str(OUTPUT_DIR / "predictions.duckdb")))
 
 # ── Demand level thresholds ──────────────────────────────────────────────────
 # trip_count quantiles approximated from the ML table; categorical bands
@@ -17,13 +23,10 @@ DUCKDB_PATH = OUTPUT_DIR / "predictions.duckdb"
 DEMAND_LEVELS = ("low", "medium", "high", "very_high")
 DEMAND_QUANTILES = (0.25, 0.50, 0.75)
 
-# ── LLM agent ────────────────────────────────────────────────────────────────
-import os
-
 # Provider selection. "anthropic" uses the Claude SDK + native tool calling.
 # "ollama" uses a local Ollama server with a Gemma-friendly prompt pattern
 # (Gemma has no native tool-call support, so we drive it via SQL extraction).
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic").lower()
 
 # Anthropic settings
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")

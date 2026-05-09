@@ -77,6 +77,17 @@ CRITICAL hints to avoid silent wrong answers:
 - "6 pm" → pickup_hour = 18           (24-hour clock)
 - "Manhattan", "Brooklyn" etc. → borough = 'Manhattan'  (always quoted, exact case)
 - Boolean AND must be `AND`, not `&&`. SQL is standard SQL, not C/JS.
+s- "Top N zones", "busiest zones", and "best zones" must return DISTINCT zones.
+  Never return the same zone multiple times just because it appears in several
+  months, days, or sources.
+- If the user question includes dashboard filter context, use those month/day/hour
+  filters unless the user explicitly asks for a broader period.
+- If ranking over multiple months or days, rank by AVG(predicted_trip_count) and
+  label it as average predicted trips per matching time bucket. Do NOT use SUM
+  across months/days unless the user asks for cumulative/total demand.
+- SUM(predicted_trip_count) is only appropriate for combining source rows inside
+  one exact time slice (same zone + month + day + hour), or when the user asks
+  for a total.
 - Always end with LIMIT (10 unless asked otherwise).
 
 Rules:
@@ -92,58 +103,96 @@ FEW_SHOT_EXAMPLES = """Examples:
 
 Q: Top 3 busiest zones in Manhattan on Friday at 6pm.
 ```sql
-SELECT zone, predicted_trip_count
+SELECT zone, AVG(predicted_trip_count) AS avg_predicted_trips
 FROM current_taxi_demand_predictions
 WHERE borough = 'Manhattan'
   AND pickup_day_of_week = 6
   AND pickup_hour = 18
-ORDER BY predicted_trip_count DESC
+GROUP BY zone
+ORDER BY avg_predicted_trips DESC
 LIMIT 3
+```
+
+Q: Dashboard filters are Month=June, Day=Monday, Hour=18, Source=Combined.
+User asks: Top 5 busiest zones in Manhattan.
+```sql
+SELECT zone, SUM(predicted_trip_count) AS predicted_trips
+FROM current_taxi_demand_predictions
+WHERE borough = 'Manhattan'
+  AND pickup_month = 6
+  AND pickup_day_of_week = 2
+  AND pickup_hour = 18
+GROUP BY zone
+ORDER BY predicted_trips DESC
+LIMIT 5
 ```
 
 Q: Where should I drive for the most RELIABLE income on a weekday at 6pm?
 ```sql
-SELECT zone, borough, mean_demand, demand_cv, reliability_score
+SELECT
+  zone,
+  borough,
+  AVG(mean_demand) AS avg_demand,
+  AVG(demand_cv) AS avg_demand_cv,
+  AVG(reliability_score) AS avg_reliability_score
 FROM current_zone_reliability
 WHERE source_name = 'yellow'
   AND pickup_day_of_week IN (2,3,4,5,6)
   AND pickup_hour = 18
   AND mean_demand > 30
-ORDER BY reliability_score DESC
+GROUP BY zone, borough
+ORDER BY avg_reliability_score DESC
 LIMIT 5
 ```
 
 Q: Which zones are GROWING fastest year-over-year for yellow taxis?
 ```sql
-SELECT zone, borough, trend_slope, mean_demand, trend_score
+SELECT
+  zone,
+  borough,
+  AVG(trend_slope) AS avg_trend_slope,
+  AVG(mean_demand) AS avg_demand,
+  AVG(trend_score) AS avg_trend_score
 FROM current_zone_reliability
 WHERE source_name = 'yellow'
   AND pickup_day_of_week = 6
   AND pickup_hour = 18
-ORDER BY trend_slope DESC
+GROUP BY zone, borough
+ORDER BY avg_trend_slope DESC
 LIMIT 10
 ```
 
 Q: Where does yellow taxi still dominate over Uber/Lyft (HVFHV)?
 ```sql
-SELECT zone, borough, yellow_total, hvfhv_total, yellow_share
+SELECT
+  zone,
+  borough,
+  SUM(yellow_total) AS yellow_trips,
+  SUM(hvfhv_total) AS hvfhv_trips,
+  SUM(yellow_total) * 1.0 / NULLIF(SUM(yellow_total) + SUM(hvfhv_total), 0) AS yellow_share
 FROM current_zone_reliability
 WHERE source_name = 'yellow'
   AND pickup_hour = 18
   AND mean_demand > 50
+GROUP BY zone, borough
 ORDER BY yellow_share DESC
 LIMIT 10
 ```
 
 Q: Show me high-demand but VOLATILE zones (avoid these — risky bets).
 ```sql
-SELECT zone, borough, mean_demand, demand_cv
+SELECT
+  zone,
+  borough,
+  AVG(mean_demand) AS avg_demand,
+  AVG(demand_cv) AS avg_demand_cv
 FROM current_zone_reliability
 WHERE source_name = 'yellow'
   AND pickup_day_of_week = 6
   AND pickup_hour = 18
   AND mean_demand > 100
-ORDER BY demand_cv DESC
+GROUP BY zone, borough
+ORDER BY avg_demand_cv DESC
 LIMIT 10
 ```
 

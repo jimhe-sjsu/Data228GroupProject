@@ -702,7 +702,21 @@ def render_analytics(predictions: pd.DataFrame, selectors: dict) -> None:
 
 
 # ── LLM panel ────────────────────────────────────────────────────────────────
-def render_llm_panel() -> None:
+def _llm_filter_context(selectors: dict) -> str:
+    src = selectors["source_name"] or "Combined"
+    mon = month_labels()[selectors["month"]]
+    dow = day_of_week_labels()[selectors["day_of_week"]]
+    return (
+        "Dashboard filters are "
+        f"Month={mon} ({selectors['month']}), "
+        f"Day={dow} ({selectors['day_of_week']}), "
+        f"Hour={selectors['hour']}, "
+        f"Source={src}. "
+        "Use these filters unless the user explicitly asks for a broader period."
+    )
+
+
+def render_llm_panel(selectors: dict) -> None:
     st.markdown(
         '<div class="tp-section" style="margin-bottom:16px;">AI Assistant</div>',
         unsafe_allow_html=True,
@@ -775,7 +789,7 @@ def render_llm_panel() -> None:
             and st.session_state.chat_history[last_user_idx + 1]["role"] == "assistant"
         )
         if not has_reply:
-            _generate_response(st.session_state.chat_history[-1]["content"])
+            _generate_response(st.session_state.chat_history[-1]["content"], selectors)
 
     # Chat input
     user_q = st.chat_input(
@@ -786,10 +800,10 @@ def render_llm_panel() -> None:
         st.session_state.chat_history.append({"role": "user", "content": user_q})
         with st.chat_message("user", avatar="👤"):
             st.markdown(user_q)
-        _generate_response(user_q)
+        _generate_response(user_q, selectors)
 
 
-def _generate_response(user_q: str) -> None:
+def _generate_response(user_q: str, selectors: dict) -> None:
     """Generate and display an AI assistant response — no logs, just the answer."""
     with st.chat_message("assistant", avatar="🚕"):
         with st.spinner("Thinking..."):
@@ -797,7 +811,8 @@ def _generate_response(user_q: str) -> None:
                 from llm_agent import ask
 
                 prior_history = st.session_state.chat_history[:-1]
-                answer, _ = ask(user_q, history=prior_history)
+                contextual_q = f"{_llm_filter_context(selectors)}\nUser question: {user_q}"
+                answer, _ = ask(contextual_q, history=prior_history)
             except RuntimeError as exc:
                 err_msg = str(exc).lower()
                 if "api_key" in err_msg or "not set" in err_msg:
@@ -1150,7 +1165,7 @@ def main() -> None:
         render_analytics(predictions, selectors)
 
     with tab_ai:
-        render_llm_panel()
+        render_llm_panel(selectors)
 
     render_footer()
 
